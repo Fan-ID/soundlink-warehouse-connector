@@ -2,7 +2,7 @@
 
 ELT connector: **Soundlink Public API → warehouse** (DuckDB or BigQuery).
 
-Uses only public interfaces ([docs.getsoundlink.com](https://docs.getsoundlink.com)) — API key auth, campaign list, and JSONL metric exports. No internal Soundlink services.
+Uses only public interfaces ([docs.getsoundlink.com](https://docs.getsoundlink.com)) — API key auth, campaign list, and JSONL metric exports.
 
 ```text
 api.getsoundlink.com  →  soundlink-sync  →  DuckDB | BigQuery
