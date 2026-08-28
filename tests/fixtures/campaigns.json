@@ -1,0 +1,28 @@
+{
+  "data": {
+    "items": [
+      {
+        "campaignId": "f1e28d31-c358-4284-9bef-00a2334625fd",
+        "organizationId": "a7ac3173-2f71-4e79-921f-d15d7112dd11",
+        "status": "active",
+        "socialPlatform": "meta",
+        "dailyBudget": 25.0,
+        "totalBudget": 750.0,
+        "campaignDuration": 30,
+        "generation": 3,
+        "createdAt": "2026-01-15T10:00:00Z",
+        "updatedAt": "2026-03-01T08:30:00Z",
+        "strategyType": "maximum_growth"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "pageSize": 100,
+      "totalCount": 1,
+      "totalPages": 1
+    }
+  },
+  "meta": {
+    "requestId": "req-test-001"
+  }
+}
