@@ -40,19 +40,21 @@ SOUNDLINK_API_KEY=sk_...
 | Step        | Detail                                                             |
 | ----------- | ------------------------------------------------------------------ |
 | Dataset     | Created if missing (`exists_ok`)                                   |
-| Tables      | `campaigns`, `campaign_country_daily`, `campaign_engagement_daily` |
+| Tables      | Campaigns: `campaigns`, `campaign_country_daily`, `campaign_engagement_daily`. Soundlinks: `soundlinks`, `soundlink_country_daily`, `soundlink_engagement_daily` |
 | Schema      | Existing tables: missing columns are **added** (nullable)          |
 | Upsert      | Load NDJSON → temp staging table → `MERGE` on PK → drop staging    |
 | Staging TTL | Table expiration ~1 day (cleanup safety net)                       |
 
-Primary keys match the Public API docs (`campaign_country_daily` / `campaign_engagement_daily` v1.0).
+Primary keys match the Public API docs (`campaign_*` / `soundlink_*` daily schemas v1.0).
 
 ## Sync
 
 ```bash
 uv run soundlink-sync ping
-uv run soundlink-sync sync --mode incremental
-uv run soundlink-sync sync --mode full --campaign-id <uuid>
+uv run soundlink-sync sync --mode incremental --entity campaigns
+uv run soundlink-sync sync --mode full --entity campaigns --campaign-id <uuid>
+uv run soundlink-sync sync --mode incremental --entity soundlinks
+uv run soundlink-sync sync --mode full --entity soundlinks --soundlink-id <id>
 ```
 
 ## Query
@@ -60,6 +62,13 @@ uv run soundlink-sync sync --mode full --campaign-id <uuid>
 ```sql
 SELECT campaign_id, country_code, report_date, streams, spend_total, cpl
 FROM `my-gcp-project.soundlink.campaign_country_daily`
+ORDER BY report_date DESC
+LIMIT 10;
+```
+
+```sql
+SELECT soundlink_id, country_code, report_date, views, streams, ctr_lp
+FROM `my-gcp-project.soundlink.soundlink_country_daily`
 ORDER BY report_date DESC
 LIMIT 10;
 ```
@@ -76,8 +85,20 @@ GROUP BY 1, 2
 ORDER BY spend DESC;
 ```
 
+```sql
+SELECT s.soundlink_id, s.status,
+       SUM(m.views) AS views,
+       SUM(m.streams) AS streams
+FROM `my-gcp-project.soundlink.soundlinks` s
+JOIN `my-gcp-project.soundlink.soundlink_country_daily` m
+  USING (soundlink_id)
+WHERE m.report_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+GROUP BY 1, 2
+ORDER BY views DESC;
+```
+
 ## Notes
 
 - First `ensure_schema` may create empty tables; costs are negligible until data lands.
-- Large orgs: prefer incremental daily sync; use `--mode full` once per campaign for backfill.
+- Large orgs: prefer incremental daily sync; use `--mode full` once per entity for backfill.
 - Rate limits are on the **Soundlink API** side; BigQuery load/MERGE is per batch.

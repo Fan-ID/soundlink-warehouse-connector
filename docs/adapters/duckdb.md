@@ -23,7 +23,9 @@ DUCKDB_PATH=./data/soundlink.duckdb
 
 ## Behavior
 
-- Tables: `campaigns`, `campaign_country_daily`, `campaign_engagement_daily`
+- Tables (by `--entity`):
+  - `campaigns`: `campaigns`, `campaign_country_daily`, `campaign_engagement_daily`
+  - `soundlinks`: `soundlinks`, `soundlink_country_daily`, `soundlink_engagement_daily`
 - Upsert: `INSERT OR REPLACE` on Public API primary keys (each batch in a transaction)
 - Schema migrations: `ALTER TABLE … ADD COLUMN IF NOT EXISTS` for new fields
 
@@ -39,6 +41,12 @@ print(c.execute("""
   ORDER BY report_date DESC
   LIMIT 10
 """).fetchall())
+print(c.execute("""
+  SELECT soundlink_id, country_code, report_date, views, streams, ctr_lp
+  FROM soundlink_country_daily
+  ORDER BY report_date DESC
+  LIMIT 10
+""").fetchall())
 PY
 ```
 
@@ -51,4 +59,15 @@ JOIN campaign_country_daily m USING (campaign_id)
 WHERE m.report_date >= current_date - INTERVAL 30 DAY
 GROUP BY 1, 2
 ORDER BY spend DESC;
+```
+
+```sql
+SELECT s.soundlink_id, s.status,
+       SUM(m.views) AS views,
+       SUM(m.streams) AS streams
+FROM soundlinks s
+JOIN soundlink_country_daily m USING (soundlink_id)
+WHERE m.report_date >= current_date - INTERVAL 30 DAY
+GROUP BY 1, 2
+ORDER BY views DESC;
 ```
