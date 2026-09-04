@@ -90,9 +90,10 @@ def sync(
     finally:
         loader.close()
 
+    count_label = "campaigns" if entity == "campaigns" else "soundlinks"
     typer.echo(
         f"Done ({mode}, {entity}): destination={settings.destination} "
-        f"entities={stats.entities_synced} "
+        f"{count_label}={stats.entities_synced} "
         f"skipped={stats.entities_skipped} "
         f"resumed_skip={stats.entities_resumed_skip} "
         f"breakdown_rows={stats.breakdown_rows} "

@@ -240,6 +240,42 @@ def test_run_sync_skips_no_window_overlap_and_marks_complete(tmp_path: Path) -> 
     assert state.get("last_sync") is not None
 
 
+def test_run_sync_resume_skips_completed_soundlinks(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    state = StateStore(settings.state_path)
+    state.set(
+        "run:soundlinks:incremental:2026-08-28",
+        {"completed_soundlink_ids": ["sl-1"], "mode": "incremental"},
+    )
+    state.save()
+
+    client = MagicMock()
+    client.iter_soundlinks.return_value = iter([_soundlink("sl-1"), _soundlink("sl-2")])
+    client.export_metrics_jsonl.return_value = ([], 0)
+    loader = _loader()
+
+    stats = run_sync(
+        settings,
+        client,
+        loader,
+        state,
+        "incremental",
+        entity="soundlinks",
+        today=date(2026, 8, 28),
+        resume=True,
+    )
+
+    assert stats.entities_resumed_skip == 1
+    # sl-2 only: 2 exports (breakdown + engagement) for one window
+    assert client.export_metrics_jsonl.call_count == 2
+    for call in client.export_metrics_jsonl.call_args_list:
+        assert call.kwargs["soundlink_id"] == "sl-2"
+        assert "campaign_id" not in call.kwargs or call.kwargs.get("campaign_id") is None
+    assert stats.errors == []
+    assert state.get("last_sync_soundlinks") is not None
+    assert state.get("run:soundlinks:incremental:2026-08-28") is None
+
+
 def test_run_sync_soundlinks_uses_separate_resume_key(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     state = StateStore(settings.state_path)
