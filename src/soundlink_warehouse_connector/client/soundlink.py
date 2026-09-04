@@ -20,13 +20,17 @@ from soundlink_warehouse_connector.client.models import (
     EXPECTED_SCHEMA_VERSION,
     CampaignSummary,
     Pagination,
+    SoundlinkSummary,
     validate_breakdown_row,
     validate_engagement_row,
+    validate_soundlink_breakdown_row,
+    validate_soundlink_engagement_row,
 )
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CAMPAIGNS_PAGE_SIZE = 25
+DEFAULT_SOUNDLINKS_PAGE_SIZE = 25
 
 
 class SoundlinkApiError(Exception):
@@ -104,10 +108,12 @@ class SoundlinkClient:
         timeout_seconds: float = 120.0,
         max_retries: int = 5,
         campaigns_page_size: int = DEFAULT_CAMPAIGNS_PAGE_SIZE,
+        soundlinks_page_size: int = DEFAULT_SOUNDLINKS_PAGE_SIZE,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._max_retries = max_retries
         self._campaigns_page_size = campaigns_page_size
+        self._soundlinks_page_size = soundlinks_page_size
         self._client = httpx.Client(
             base_url=self._base_url,
             headers={
@@ -186,23 +192,70 @@ class SoundlinkClient:
                 break
             page += 1
 
+    def get_soundlink(self, soundlink_id: str) -> SoundlinkSummary:
+        path = f"/v1/soundlinks/{soundlink_id}"
+        response = self._request("GET", path)
+        data = _unwrap_data(response.json(), path=path)
+        return SoundlinkSummary.model_validate(data)
+
+    def list_soundlinks_page(
+        self, *, page: int = 1, page_size: int | None = None
+    ) -> tuple[list[SoundlinkSummary], Pagination]:
+        size = page_size if page_size is not None else self._soundlinks_page_size
+        response = self._request(
+            "GET",
+            "/v1/soundlinks",
+            params={"page": page, "pageSize": size},
+        )
+        data = _unwrap_data(response.json(), path="/v1/soundlinks")
+        items = [SoundlinkSummary.model_validate(item) for item in data["items"]]
+        pagination = Pagination.model_validate(data["pagination"])
+        return items, pagination
+
+    def iter_soundlinks(self, *, page_size: int | None = None) -> Iterator[SoundlinkSummary]:
+        size = page_size if page_size is not None else self._soundlinks_page_size
+        page = 1
+        while True:
+            items, pagination = self.list_soundlinks_page(page=page, page_size=size)
+            yield from items
+            if page >= pagination.total_pages:
+                break
+            page += 1
+
     def export_metrics_jsonl(
         self,
         *,
-        campaign_id: str,
         kind: str,
         start_date: date,
         end_date: date,
+        campaign_id: str | None = None,
+        soundlink_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int | None]:
         """Stream JSONL metrics; retries transport errors and X-Row-Count mismatch."""
-        if kind == "breakdown":
-            path = f"/v1/campaigns/{campaign_id}/metrics/breakdown/export"
-            validate = validate_breakdown_row
-        elif kind == "engagement":
-            path = f"/v1/campaigns/{campaign_id}/metrics/engagement/export"
-            validate = validate_engagement_row
+        if (campaign_id is None) == (soundlink_id is None):
+            raise ValueError("Pass exactly one of campaign_id or soundlink_id")
+
+        if campaign_id is not None:
+            entity_id = campaign_id
+            if kind == "breakdown":
+                path = f"/v1/campaigns/{campaign_id}/metrics/breakdown/export"
+                validate = validate_breakdown_row
+            elif kind == "engagement":
+                path = f"/v1/campaigns/{campaign_id}/metrics/engagement/export"
+                validate = validate_engagement_row
+            else:
+                raise ValueError(f"Unknown export kind: {kind}")
         else:
-            raise ValueError(f"Unknown export kind: {kind}")
+            assert soundlink_id is not None
+            entity_id = soundlink_id
+            if kind == "breakdown":
+                path = f"/v1/soundlinks/{soundlink_id}/metrics/breakdown/export"
+                validate = validate_soundlink_breakdown_row
+            elif kind == "engagement":
+                path = f"/v1/soundlinks/{soundlink_id}/metrics/engagement/export"
+                validate = validate_soundlink_engagement_row
+            else:
+                raise ValueError(f"Unknown export kind: {kind}")
 
         params: dict[str, str] = {
             "startDate": start_date.isoformat(),
@@ -251,7 +304,7 @@ class SoundlinkClient:
 
                 if expected is not None and expected != len(rows):
                     raise SoundlinkApiError(
-                        f"X-Row-Count mismatch for {kind} {campaign_id}: "
+                        f"X-Row-Count mismatch for {kind} {entity_id}: "
                         f"header={expected} parsed={len(rows)}",
                         retryable=True,
                     )

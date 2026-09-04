@@ -98,6 +98,57 @@ def test_export_metrics_jsonl() -> None:
 
 
 @respx.mock
+def test_export_soundlink_metrics_jsonl() -> None:
+    soundlink_id = "V1StGXR8_Z5jdHi6B-myT"
+    breakdown_body = (FIXTURES / "soundlink_breakdown.jsonl").read_text(encoding="utf-8")
+    engagement_body = (FIXTURES / "soundlink_engagement.jsonl").read_text(
+        encoding="utf-8"
+    )
+    breakdown_route = respx.get(
+        f"{BASE_URL}/v1/soundlinks/{soundlink_id}/metrics/breakdown/export"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"X-Row-Count": "2", "Content-Type": "application/x-ndjson"},
+            content=breakdown_body.encode(),
+        )
+    )
+    engagement_route = respx.get(
+        f"{BASE_URL}/v1/soundlinks/{soundlink_id}/metrics/engagement/export"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"X-Row-Count": "2", "Content-Type": "application/x-ndjson"},
+            content=engagement_body.encode(),
+        )
+    )
+    with SoundlinkClient(api_key=API_KEY, base_url=BASE_URL, max_retries=0) as client:
+        breakdown_rows, breakdown_count = client.export_metrics_jsonl(
+            soundlink_id=soundlink_id,
+            kind="breakdown",
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 28),
+        )
+        engagement_rows, engagement_count = client.export_metrics_jsonl(
+            soundlink_id=soundlink_id,
+            kind="engagement",
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 28),
+        )
+
+    assert breakdown_count == 2
+    assert len(breakdown_rows) == 2
+    assert breakdown_rows[0]["soundlink_id"] == soundlink_id
+    assert breakdown_rows[0]["country_code"] == "US"
+    assert engagement_count == 2
+    assert len(engagement_rows) == 2
+    assert engagement_rows[0]["soundlink_id"] == soundlink_id
+    assert breakdown_route.called
+    assert engagement_route.called
+    assert breakdown_route.calls[0].request.headers["Accept"] == "application/x-ndjson"
+
+
+@respx.mock
 def test_export_metrics_row_count_mismatch_fails() -> None:
     campaign_id = "f1e28d31-c358-4284-9bef-00a2334625fd"
     breakdown_body = (FIXTURES / "breakdown.jsonl").read_text(encoding="utf-8")

@@ -2,7 +2,7 @@
 
 ELT connector: **Soundlink Public API → warehouse** (DuckDB or BigQuery).
 
-[getsoundlink.com/docs](https://getsoundlink.com/docs) — API key auth, campaign list, and JSONL metric exports.
+[getsoundlink.com/docs](https://getsoundlink.com/docs) — API key auth, campaign or soundlink list, and JSONL metric exports. No internal Soundlink services.
 
 ```text
 api.getsoundlink.com  →  soundlink-sync  →  DuckDB | BigQuery
@@ -12,7 +12,9 @@ api.getsoundlink.com  →  soundlink-sync  →  DuckDB | BigQuery
 
 - Python **3.13+** (developed on 3.14)
 - [uv](https://docs.astral.sh/uv/) ([install](https://docs.astral.sh/uv/getting-started/installation/))
-- Soundlink org API key with `campaigns:read` and `metrics:read`  
+- Soundlink org API key with:
+  - **Campaigns:** `campaigns:read` + `metrics:read`
+  - **Soundlinks:** `soundlinks:read`  
   (Soundlink app → Settings → Developer → API keys)
 
 ## Setup
@@ -89,6 +91,7 @@ Shared env (all destinations) — see `.env.example` for the full template:
 | `STATE_PATH`                | `./data/sync_state.json`       | Resume + last successful sync                          |
 | `INCREMENTAL_LOOKBACK_DAYS` | `10`                           | Inclusive days ending today (covers ~7-day mutability) |
 | `CAMPAIGNS_PAGE_SIZE`       | `25`                           | Max 100                                                |
+| `SOUNDLINKS_PAGE_SIZE`      | `25`                           | Max 100                                                |
 | `REQUEST_TIMEOUT_SECONDS`   | `120`                          |                                                        |
 | `MAX_RETRIES`               | `5`                            | Honors `Retry-After` on 429                            |
 | `BIGQUERY_PROJECT`          | —                              | Required if `DESTINATION=bigquery`                     |
@@ -99,10 +102,13 @@ Shared env (all destinations) — see `.env.example` for the full template:
 
 ```bash
 uv run soundlink-sync ping
-uv run soundlink-sync sync --mode incremental
-uv run soundlink-sync sync --mode full
-uv run soundlink-sync sync --mode incremental --campaign-id <uuid>
-uv run soundlink-sync sync --mode incremental --no-resume
+uv run soundlink-sync sync --mode incremental --entity campaigns
+uv run soundlink-sync sync --mode full --entity campaigns
+uv run soundlink-sync sync --mode incremental --entity campaigns --campaign-id <uuid>
+uv run soundlink-sync sync --mode incremental --entity soundlinks
+uv run soundlink-sync sync --mode full --entity soundlinks
+uv run soundlink-sync sync --mode incremental --entity soundlinks --soundlink-id <id>
+uv run soundlink-sync sync --mode incremental --entity campaigns --no-resume
 ```
 
 | Mode          | Behavior                                                          |
@@ -110,45 +116,61 @@ uv run soundlink-sync sync --mode incremental --no-resume
 | `incremental` | Last N inclusive days, clamped to `createdAt`; skip if no overlap |
 | `full`        | Backfill from `createdAt` → today in ≤90-day windows              |
 
+| `--entity`   | Warehouse tables                                                      |
+| ------------ | --------------------------------------------------------------------- |
+| `campaigns`  | `campaigns`, `campaign_country_daily`, `campaign_engagement_daily`    |
+| `soundlinks` | `soundlinks`, `soundlink_country_daily`, `soundlink_engagement_daily` |
+
+Default `--entity` is `campaigns` (existing behavior). Campaigns and soundlinks use **separate** resume keys and `last_sync` records so one entity never blocks the other.
+
 Re-runs are **idempotent** (upsert / `MERGE` on documented primary keys).
 
 ### Resume / state
 
-On failure mid-run (org-wide sync only), progress is saved under
-`run:{mode}:{YYYY-MM-DD}` with `completed_campaign_ids`. The next org-wide sync
-for the same mode + calendar day **skips** those campaigns. After a fully
-successful org-wide run, `last_sync` is written and the in-progress key is cleared.
+On failure mid-run (org-wide sync only), progress is saved under:
 
-`--campaign-id` uses `GET /v1/campaigns/{id}` and **does not** read or clear
-org-wide resume state (so a single-campaign sync cannot wipe a partial full-org run).
+- campaigns: `run:{mode}:{YYYY-MM-DD}` with `completed_campaign_ids`
+- soundlinks: `run:soundlinks:{mode}:{YYYY-MM-DD}` with `completed_soundlink_ids`
 
-Use `--no-resume` to ignore progress and re-fetch every campaign.
+The next org-wide sync for the same entity + mode + calendar day **skips** those IDs. After a fully successful org-wide run, `last_sync` (campaigns) or `last_sync_soundlinks` is written and the in-progress key is cleared.
 
-`last_sync` is set **only** when the run finishes with zero errors.
+`--campaign-id` / `--soundlink-id` fetch a single entity via `GET` and **never** read or write org-wide resume state (so a one-off sync cannot wipe a partial full-org run).
+
+Use `--no-resume` to ignore progress and re-fetch every entity for that `--entity`.
+
+`last_sync` / `last_sync_soundlinks` is set **only** when the run finishes with zero errors.
 
 ## What gets synced
 
-| Stream           | Source                        | Table                       |
-| ---------------- | ----------------------------- | --------------------------- |
-| Campaigns        | `GET /v1/campaigns`           | `campaigns`                 |
-| Country daily    | `…/metrics/breakdown/export`  | `campaign_country_daily`    |
-| Engagement daily | `…/metrics/engagement/export` | `campaign_engagement_daily` |
+| Stream                    | Source                                      | Table                         |
+| ------------------------- | ------------------------------------------- | ----------------------------- |
+| Campaigns                 | `GET /v1/campaigns`                         | `campaigns`                   |
+| Campaign country daily    | `…/campaigns/…/metrics/breakdown/export`    | `campaign_country_daily`      |
+| Campaign engagement daily | `…/campaigns/…/metrics/engagement/export`   | `campaign_engagement_daily`   |
+| Soundlinks                | `GET /v1/soundlinks`                        | `soundlinks`                  |
+| Soundlink country daily   | `…/soundlinks/…/metrics/breakdown/export`   | `soundlink_country_daily`     |
+| Soundlink engagement daily| `…/soundlinks/…/metrics/engagement/export`  | `soundlink_engagement_daily`  |
 
 ### Primary keys
 
 - `campaigns`: `campaign_id`
 - `campaign_country_daily`: `(provider, account_id, report_date, campaign_id, country_code)`
 - `campaign_engagement_daily`: `(provider, account_id, report_date, campaign_id, engagement_context, country_code, engaged_spotify_track_id)`
+- `soundlinks`: `soundlink_id`
+- `soundlink_country_daily`: `(provider, account_id, report_date, soundlink_id, country_code)`
+- `soundlink_engagement_daily`: `(provider, account_id, report_date, soundlink_id, engagement_context, country_code, engaged_spotify_track_id)`
 
 ### Metrics caveats (from public docs)
 
 - Rows for a `report_date` can change for up to **7 days** — incremental lookback re-upserts that window.
 - Export requests are capped at **90 days**; full sync slices automatically.
 - Do **not** sum `listeners` across days on engagement rows.
+- Soundlink breakdown rows have **no** financial fields (no spend/impressions).
+- Soundlink engagement rows have **no** `status` field.
 
 ## Scheduling
 
-Run `--mode full` once (or per campaign), then keep incremental on a schedule.
+Run `--mode full` once (or per entity), then keep incremental on a schedule.
 
 | How                           | Doc                                                                    |
 | ----------------------------- | ---------------------------------------------------------------------- |
@@ -190,5 +212,4 @@ docs/
 
 ## License
 
-Internal Soundlink reference connector. **Not published on PyPI** — clone and
-`uv sync` as above.
+MIT — see [LICENSE](LICENSE). **Not published on PyPI** — clone and `uv sync` as above.

@@ -6,7 +6,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from soundlink_warehouse_connector.client.models import CampaignSummary
+from soundlink_warehouse_connector.client.models import CampaignSummary, SoundlinkSummary
 from soundlink_warehouse_connector.loaders.duckdb import DuckDbLoader
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -69,3 +69,53 @@ def test_campaign_upsert_stores_raw_json(loader: DuckDbLoader, tmp_path: Path) -
 
     assert row[0] == campaign.campaign_id
     assert row[1] == campaign.campaign_id
+
+
+def test_soundlink_breakdown_upsert_is_idempotent(
+    loader: DuckDbLoader, tmp_path: Path
+) -> None:
+    rows = _load_jsonl("soundlink_breakdown.jsonl")
+    assert loader.upsert_soundlink_breakdown_rows(rows) == 2
+
+    updated = [{**rows[0], "streams": 999, "ctr_lp": 0.5}]
+    assert loader.upsert_soundlink_breakdown_rows(updated) == 1
+
+    conn = duckdb.connect(str(tmp_path / "test.duckdb"))
+    count = conn.execute("SELECT COUNT(*) FROM soundlink_country_daily").fetchone()[0]
+    streams, ctr_lp = conn.execute(
+        "SELECT streams, ctr_lp FROM soundlink_country_daily WHERE country_code = 'US'"
+    ).fetchone()
+    conn.close()
+
+    assert count == 2
+    assert streams == 999
+    assert ctr_lp == 0.5
+
+
+def test_soundlink_engagement_upsert_is_idempotent(
+    loader: DuckDbLoader, tmp_path: Path
+) -> None:
+    rows = _load_jsonl("soundlink_engagement.jsonl")
+    assert loader.upsert_soundlink_engagement_rows(rows) == 2
+    assert loader.upsert_soundlink_engagement_rows(rows) == 2
+
+    conn = duckdb.connect(str(tmp_path / "test.duckdb"))
+    count = conn.execute("SELECT COUNT(*) FROM soundlink_engagement_daily").fetchone()[0]
+    conn.close()
+    assert count == 2
+
+
+def test_soundlink_upsert_stores_raw_json(loader: DuckDbLoader, tmp_path: Path) -> None:
+    payload = json.loads((FIXTURES / "soundlinks.json").read_text(encoding="utf-8"))
+    item = payload["data"]["items"][0]
+    soundlink = SoundlinkSummary.model_validate(item)
+    assert loader.upsert_soundlinks([soundlink]) == 1
+
+    conn = duckdb.connect(str(tmp_path / "test.duckdb"))
+    row = conn.execute(
+        "SELECT soundlink_id, raw_json->>'soundlinkId' FROM soundlinks"
+    ).fetchone()
+    conn.close()
+
+    assert row[0] == soundlink.soundlink_id
+    assert row[1] == soundlink.soundlink_id
