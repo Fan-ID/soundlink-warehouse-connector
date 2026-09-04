@@ -1,0 +1,25 @@
+{
+  "data": {
+    "items": [
+      {
+        "soundlinkId": "V1StGXR8_Z5jdHi6B-myT",
+        "organizationId": "a7ac3173-2f71-4e79-921f-d15d7112dd11",
+        "name": "Midnight Drive",
+        "url": "https://sndl.ink/soundlink/V1StGXR8_Z5jdHi6B-myT",
+        "targetType": "track",
+        "spotifyUrl": "https://open.spotify.com/track/11dFghVXANMlKmJXsNCbNl",
+        "status": "active",
+        "createdAt": "2026-04-01T10:00:00.000Z"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "pageSize": 10,
+      "totalCount": 1,
+      "totalPages": 1
+    }
+  },
+  "meta": {
+    "requestId": "550e8400-e29b-41d4-a716-446655440000"
+  }
+}

@@ -33,6 +33,12 @@ class Settings(BaseSettings):
         le=100,
         description="GET /v1/campaigns pageSize (smaller reduces 504 risk)",
     )
+    soundlinks_page_size: int = Field(
+        default=25,
+        ge=1,
+        le=100,
+        description="GET /v1/soundlinks pageSize (max 100)",
+    )
     request_timeout_seconds: float = Field(default=120.0, gt=0)
     max_retries: int = Field(default=5, ge=0, le=20)
     state_path: Path = Path("./data/sync_state.json")

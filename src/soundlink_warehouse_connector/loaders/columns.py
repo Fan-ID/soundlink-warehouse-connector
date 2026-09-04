@@ -4,7 +4,7 @@ import json
 from datetime import date, datetime
 from typing import Any
 
-from soundlink_warehouse_connector.client.models import CampaignSummary
+from soundlink_warehouse_connector.client.models import CampaignSummary, SoundlinkSummary
 
 CAMPAIGNS_PK: tuple[str, ...] = ("campaign_id",)
 BREAKDOWN_PK: tuple[str, ...] = (
@@ -109,6 +109,96 @@ ENGAGEMENT_COLUMNS: tuple[str, ...] = (
     "synced_at",
 )
 
+SOUNDLINKS_PK: tuple[str, ...] = ("soundlink_id",)
+SOUNDLINK_BREAKDOWN_PK: tuple[str, ...] = (
+    "provider",
+    "account_id",
+    "report_date",
+    "soundlink_id",
+    "country_code",
+)
+SOUNDLINK_ENGAGEMENT_PK: tuple[str, ...] = (
+    "provider",
+    "account_id",
+    "report_date",
+    "soundlink_id",
+    "engagement_context",
+    "country_code",
+    "engaged_spotify_track_id",
+)
+
+SOUNDLINKS_COLUMNS: tuple[str, ...] = (
+    "soundlink_id",
+    "organization_id",
+    "name",
+    "url",
+    "target_type",
+    "spotify_url",
+    "status",
+    "created_at",
+    "raw_json",
+    "synced_at",
+)
+
+SOUNDLINK_BREAKDOWN_COLUMNS: tuple[str, ...] = (
+    "provider",
+    "account_id",
+    "report_date",
+    "soundlink_id",
+    "country_code",
+    "schema_version",
+    "report_date_timezone",
+    "exported_at",
+    "soundlink_name",
+    "soundlink_target_type",
+    "soundlink_target_isrc",
+    "soundlink_target_spotify_track_id",
+    "soundlink_target_playlist_id",
+    "views",
+    "link_clicks",
+    "streams",
+    "listeners",
+    "new_listeners",
+    "returning_listeners",
+    "new_listener_streams",
+    "returning_listener_streams",
+    "followers",
+    "streams_per_listener",
+    "ctr_lp",
+    "raw_json",
+    "synced_at",
+)
+
+SOUNDLINK_ENGAGEMENT_COLUMNS: tuple[str, ...] = (
+    "provider",
+    "account_id",
+    "report_date",
+    "soundlink_id",
+    "engagement_context",
+    "country_code",
+    "engaged_spotify_track_id",
+    "schema_version",
+    "report_date_timezone",
+    "exported_at",
+    "soundlink_name",
+    "soundlink_target_type",
+    "soundlink_target_isrc",
+    "soundlink_target_spotify_track_id",
+    "soundlink_target_playlist_id",
+    "engaged_track_isrc",
+    "engaged_track_name",
+    "playlist_position",
+    "new_listeners",
+    "returning_listeners",
+    "listeners",
+    "new_listener_streams",
+    "returning_listener_streams",
+    "streams",
+    "spl",
+    "raw_json",
+    "synced_at",
+)
+
 
 def campaign_record(
     campaign: CampaignSummary, synced_at: datetime | str
@@ -187,6 +277,90 @@ def engagement_record(row: dict[str, Any], synced_at: datetime | str) -> dict[st
         "campaign_target_spotify_track_id": row.get("campaign_target_spotify_track_id"),
         "campaign_target_playlist_id": row.get("campaign_target_playlist_id"),
         "status": row.get("status"),
+        "engaged_track_isrc": row.get("engaged_track_isrc"),
+        "engaged_track_name": row.get("engaged_track_name"),
+        "playlist_position": row.get("playlist_position"),
+        "new_listeners": row.get("new_listeners"),
+        "returning_listeners": row.get("returning_listeners"),
+        "listeners": row.get("listeners"),
+        "new_listener_streams": row.get("new_listener_streams"),
+        "returning_listener_streams": row.get("returning_listener_streams"),
+        "streams": row.get("streams"),
+        "spl": row.get("spl"),
+        "raw_json": dict(row),
+        "synced_at": synced_at,
+    }
+
+
+def soundlink_record(
+    soundlink: SoundlinkSummary, synced_at: datetime | str
+) -> dict[str, Any]:
+    return {
+        "soundlink_id": soundlink.soundlink_id,
+        "organization_id": soundlink.organization_id,
+        "name": soundlink.name,
+        "url": soundlink.url,
+        "target_type": soundlink.target_type,
+        "spotify_url": soundlink.spotify_url,
+        "status": soundlink.status,
+        "created_at": soundlink.created_at,
+        "raw_json": soundlink.model_dump(mode="json", by_alias=True),
+        "synced_at": synced_at,
+    }
+
+
+def soundlink_breakdown_record(
+    row: dict[str, Any], synced_at: datetime | str
+) -> dict[str, Any]:
+    return {
+        "provider": row["provider"],
+        "account_id": row["account_id"],
+        "report_date": row["report_date"],
+        "soundlink_id": row["soundlink_id"],
+        "country_code": row["country_code"],
+        "schema_version": row.get("schema_version"),
+        "report_date_timezone": row.get("report_date_timezone"),
+        "exported_at": row.get("exported_at"),
+        "soundlink_name": row.get("soundlink_name"),
+        "soundlink_target_type": row.get("soundlink_target_type"),
+        "soundlink_target_isrc": row.get("soundlink_target_isrc"),
+        "soundlink_target_spotify_track_id": row.get("soundlink_target_spotify_track_id"),
+        "soundlink_target_playlist_id": row.get("soundlink_target_playlist_id"),
+        "views": row.get("views"),
+        "link_clicks": row.get("link_clicks"),
+        "streams": row.get("streams"),
+        "listeners": row.get("listeners"),
+        "new_listeners": row.get("new_listeners"),
+        "returning_listeners": row.get("returning_listeners"),
+        "new_listener_streams": row.get("new_listener_streams"),
+        "returning_listener_streams": row.get("returning_listener_streams"),
+        "followers": row.get("followers"),
+        "streams_per_listener": row.get("streams_per_listener"),
+        "ctr_lp": row.get("ctr_lp"),
+        "raw_json": dict(row),
+        "synced_at": synced_at,
+    }
+
+
+def soundlink_engagement_record(
+    row: dict[str, Any], synced_at: datetime | str
+) -> dict[str, Any]:
+    return {
+        "provider": row["provider"],
+        "account_id": row["account_id"],
+        "report_date": row["report_date"],
+        "soundlink_id": row["soundlink_id"],
+        "engagement_context": row["engagement_context"],
+        "country_code": row["country_code"],
+        "engaged_spotify_track_id": row["engaged_spotify_track_id"],
+        "schema_version": row.get("schema_version"),
+        "report_date_timezone": row.get("report_date_timezone"),
+        "exported_at": row.get("exported_at"),
+        "soundlink_name": row.get("soundlink_name"),
+        "soundlink_target_type": row.get("soundlink_target_type"),
+        "soundlink_target_isrc": row.get("soundlink_target_isrc"),
+        "soundlink_target_spotify_track_id": row.get("soundlink_target_spotify_track_id"),
+        "soundlink_target_playlist_id": row.get("soundlink_target_playlist_id"),
         "engaged_track_isrc": row.get("engaged_track_isrc"),
         "engaged_track_name": row.get("engaged_track_name"),
         "playlist_position": row.get("playlist_position"),

@@ -8,7 +8,7 @@ from uuid import uuid4
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 
-from soundlink_warehouse_connector.client.models import CampaignSummary
+from soundlink_warehouse_connector.client.models import CampaignSummary, SoundlinkSummary
 from soundlink_warehouse_connector.loaders.base import WarehouseLoader
 from soundlink_warehouse_connector.loaders.bigquery_schema import (
     BREAKDOWN_PK,
@@ -17,6 +17,12 @@ from soundlink_warehouse_connector.loaders.bigquery_schema import (
     CAMPAIGNS_SCHEMA,
     ENGAGEMENT_PK,
     ENGAGEMENT_SCHEMA,
+    SOUNDLINK_BREAKDOWN_PK,
+    SOUNDLINK_BREAKDOWN_SCHEMA,
+    SOUNDLINK_ENGAGEMENT_PK,
+    SOUNDLINK_ENGAGEMENT_SCHEMA,
+    SOUNDLINKS_PK,
+    SOUNDLINKS_SCHEMA,
     merge_sql,
 )
 from soundlink_warehouse_connector.loaders.columns import (
@@ -24,6 +30,9 @@ from soundlink_warehouse_connector.loaders.columns import (
     campaign_record,
     engagement_record,
     json_safe,
+    soundlink_breakdown_record,
+    soundlink_engagement_record,
+    soundlink_record,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,6 +79,9 @@ class BigQueryLoader(WarehouseLoader):
         self._ensure_table("campaigns", CAMPAIGNS_SCHEMA)
         self._ensure_table("campaign_country_daily", BREAKDOWN_SCHEMA)
         self._ensure_table("campaign_engagement_daily", ENGAGEMENT_SCHEMA)
+        self._ensure_table("soundlinks", SOUNDLINKS_SCHEMA)
+        self._ensure_table("soundlink_country_daily", SOUNDLINK_BREAKDOWN_SCHEMA)
+        self._ensure_table("soundlink_engagement_daily", SOUNDLINK_ENGAGEMENT_SCHEMA)
 
     def _table_id(self, name: str) -> str:
         return f"{self._dataset_ref}.{name}"
@@ -122,6 +134,37 @@ class BigQueryLoader(WarehouseLoader):
         prepared = [engagement_record(row, synced_at) for row in rows]
         return self._merge_rows(
             "campaign_engagement_daily", ENGAGEMENT_SCHEMA, ENGAGEMENT_PK, prepared
+        )
+
+    def upsert_soundlinks(self, soundlinks: list[SoundlinkSummary]) -> int:
+        if not soundlinks:
+            return 0
+        synced_at = datetime.now(tz=UTC)
+        rows = [soundlink_record(s, synced_at) for s in soundlinks]
+        return self._merge_rows("soundlinks", SOUNDLINKS_SCHEMA, SOUNDLINKS_PK, rows)
+
+    def upsert_soundlink_breakdown_rows(self, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        synced_at = datetime.now(tz=UTC)
+        prepared = [soundlink_breakdown_record(row, synced_at) for row in rows]
+        return self._merge_rows(
+            "soundlink_country_daily",
+            SOUNDLINK_BREAKDOWN_SCHEMA,
+            SOUNDLINK_BREAKDOWN_PK,
+            prepared,
+        )
+
+    def upsert_soundlink_engagement_rows(self, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        synced_at = datetime.now(tz=UTC)
+        prepared = [soundlink_engagement_record(row, synced_at) for row in rows]
+        return self._merge_rows(
+            "soundlink_engagement_daily",
+            SOUNDLINK_ENGAGEMENT_SCHEMA,
+            SOUNDLINK_ENGAGEMENT_PK,
+            prepared,
         )
 
     def _merge_rows(
