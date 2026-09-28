@@ -39,7 +39,6 @@ def conn(tmp_path: Path) -> duckdb.DuckDBPyConnection:
     loader.close()
 
     conn = duckdb.connect(str(db_path))
-    # Spend Aug 10 - Sep 8, $10/day in US and DE.
     conn.execute(
         """
         INSERT INTO campaign_country_daily
