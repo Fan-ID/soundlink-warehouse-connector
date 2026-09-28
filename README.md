@@ -168,6 +168,10 @@ Use `--no-resume` to ignore progress and re-fetch every entity for that `--entit
 - Soundlink breakdown rows have **no** financial fields (no spend/impressions).
 - Soundlink engagement rows have **no** `status` field.
 
+## Examples
+
+- [`examples/playlist-impact`](examples/playlist-impact): join playlist campaign engagement with your distributor statement (attributed share, position bands, before/after, recoup estimate).
+
 ## Scheduling
 
 Run `--mode full` once (or per entity), then keep incremental on a schedule.
