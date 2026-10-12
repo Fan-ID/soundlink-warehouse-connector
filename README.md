@@ -171,6 +171,7 @@ Use `--no-resume` to ignore progress and re-fetch every entity for that `--entit
 ## Examples
 
 - [`examples/playlist-impact`](examples/playlist-impact): join playlist campaign engagement with your distributor statement (attributed share, position bands, before/after, recoup estimate).
+- [`examples/catalog-spillover`](examples/catalog-spillover): split a track campaign into the promoted ISRC and other releases, then join both to your statement (attributed share, before/after, recoup estimate).
 
 ## Scheduling
 
