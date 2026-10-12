@@ -135,12 +135,19 @@ def test_same_isrc_different_spotify_id_stays_promoted(
 
 def test_attributed_share_uses_spend_window(conn: duckdb.DuckDBPyConnection) -> None:
     rows = {(r[0], r[1], str(r[2])): r[3:] for r in _run(conn, "04_attributed_share.sql")}
+
+    # 22 spend days in August, 8 in September. Engagement rows run through
+    # Sep 15; if the window used those days, September promoted would be 600.
     assert rows[("promoted", "ISRC_A", "2026-08-01")] == (880, 6400, 0.138)
     assert rows[("promoted", "ISRC_A", "2026-09-01")] == (320, 6000, 0.053)
+    assert rows[("promoted", "ISRC_A", "2026-07-01")] == (0, 4000, 0.0)
+    assert rows[("promoted", "ISRC_A", "2026-10-01")] == (0, 4800, 0.0)
+    assert rows[("promoted", "ISRC_A", "2026-11-01")] == (0, 0, None)
     assert rows[("other_releases", "ISRC_B", "2026-08-01")] == (352, 2400, 0.147)
     assert rows[("other_releases", "ISRC_D", "2026-08-01")] == (44, 0, None)
+    assert rows[("other_releases", "ISRC_N", "2026-07-01")] == (0, 20000, 0.0)
     assert rows[("other_releases", "ISRC_N", "2026-08-01")] == (6, 22000, 0.0)
-    assert not any(month == "2026-09-15" for _, _, month in rows)
+    assert rows[("other_releases", "ISRC_N", "2026-09-01")] == (0, 21000, 0.0)
 
 
 def test_before_during_after_drops_noise_isrcs(conn: duckdb.DuckDBPyConnection) -> None:

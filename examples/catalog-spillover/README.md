@@ -30,7 +30,7 @@ Any DuckDB client works; the `duckdb` CLI can run the files directly.
 - Soundlink only counts plays from listeners who connected Spotify through the campaign soundlink. Treat both buckets as a floor.
 - Query 5 keeps other-release ISRCs that did at least 5% of the promoted track's Soundlink streams in the spend window. Raise that if you only want the two or three finance would put next to spend. Recoup (query 6) does not use that cut: it prices the Soundlink streams, so a handful of plays on a catalog hit is cents.
 - Same recording on the single and the album, same ISRC: promoted, not spillover.
-- Use the statement's sale month, not the statement month, and wait until it covers at least a month past the campaign.
+- Query 4 shows statement months before and after the campaign as zeros, not missing rows. Use the sale month, not the statement month, and wait until it covers at least a month past the campaign.
 - Leave the last 7 days out of conclusions; rows can still change.
 - The recoup query assumes USD on both sides and is an estimate, not an audit. Add the two `recoup_ratio` values; do not add `spend_usd`.
 

@@ -30,12 +30,13 @@ distributor AS (
   GROUP BY ALL
 )
 SELECT
-  s.bucket,
-  s.isrc,
-  s.month,
-  s.soundlink_streams,
+  b.bucket,
+  d.isrc,
+  d.month,
+  COALESCE(s.soundlink_streams, 0) AS soundlink_streams,
   d.distributor_streams,
-  ROUND(s.soundlink_streams / NULLIF(d.distributor_streams, 0), 3) AS attributed_share
-FROM soundlink s
-LEFT JOIN distributor d USING (isrc, month)
-ORDER BY s.bucket, s.isrc, s.month;
+  ROUND(COALESCE(s.soundlink_streams, 0) / NULLIF(d.distributor_streams, 0), 3) AS attributed_share
+FROM distributor d
+JOIN (SELECT DISTINCT bucket, isrc FROM soundlink) b USING (isrc)
+LEFT JOIN soundlink s USING (bucket, isrc, month)
+ORDER BY b.bucket, d.isrc, d.month;
