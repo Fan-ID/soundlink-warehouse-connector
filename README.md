@@ -123,7 +123,7 @@ uv run soundlink-sync sync --mode incremental --entity campaigns --no-resume
 
 Default `--entity` is `campaigns` (existing behavior). Campaigns and soundlinks use **separate** resume keys and `last_sync` records so one entity never blocks the other.
 
-Soundlinks are synced in **batches of up to 50 IDs** per request: country breakdown and cohort retention (`groupBy=country`) use the batch export endpoints over a shared date window per batch (based on the earliest `createdAt` in the batch). Engagement has no batch API, so it's still fetched **per soundlink**. Resume marks an ID completed only once its batch metrics and its own engagement export have all succeeded.
+Soundlinks are synced in **batches of up to 50 IDs** per request: country breakdown and cohort retention (`groupBy=country`) use the batch export endpoints over a **shared date window** per batch (incremental = lookback only; full = earliest `createdAt` in the batch). Engagement has no batch API, so it's still fetched **per soundlink** (and skipped for IDs whose breakdown batch failed). Retention is best-effort: `403 premium_plan_required` (and other retention failures) are logged and skipped so breakdown/engagement can still complete. Resume marks an ID completed only once breakdown and that ID's engagement succeed.
 
 Re-runs are **idempotent** (upsert / `MERGE` on documented primary keys).
 

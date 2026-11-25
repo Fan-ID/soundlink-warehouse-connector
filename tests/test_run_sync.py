@@ -381,6 +381,110 @@ def test_run_sync_soundlinks_chunks_into_batches_of_50(tmp_path: Path) -> None:
     assert batch_sizes == [1, 50]
 
 
+def test_run_sync_soundlinks_premium_retention_does_not_fail_sync(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    state = StateStore(settings.state_path)
+    client = MagicMock()
+    client.iter_soundlinks.return_value = iter([_soundlink("sl-1")])
+    client.export_metrics_jsonl.return_value = ([], 0)
+
+    def _batch(*, kind: str, **_kwargs: object) -> tuple[list, int]:
+        if kind == "retention":
+            raise SoundlinkApiError(
+                "POST /v1/soundlinks/metrics/retention/export/batch failed with 403",
+                status_code=403,
+                body='{"error":{"code":"premium_plan_required"}}',
+            )
+        return [{"soundlink_id": "sl-1"}], 1
+
+    client.export_soundlink_metrics_batch_jsonl.side_effect = _batch
+    loader = _loader()
+
+    stats = run_sync(
+        settings,
+        client,
+        loader,
+        state,
+        "incremental",
+        entity="soundlinks",
+        today=date(2026, 8, 28),
+    )
+
+    assert stats.errors == []
+    assert stats.retention_rows == 0
+    assert loader.upsert_soundlink_breakdown_rows.called
+    assert not loader.upsert_soundlink_retention_rows.called
+    assert client.export_metrics_jsonl.call_count == 1
+    last = state.get("last_sync_soundlinks")
+    assert last is not None
+    assert last["retention_rows"] == 0
+    assert last["breakdown_rows"] == 1
+
+
+def test_run_sync_soundlinks_breakdown_failure_skips_engagement(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    state = StateStore(settings.state_path)
+    client = MagicMock()
+    client.iter_soundlinks.return_value = iter([_soundlink("sl-1"), _soundlink("sl-2")])
+    client.export_soundlink_metrics_batch_jsonl.side_effect = RuntimeError("batch boom")
+    client.export_metrics_jsonl.return_value = ([], 0)
+    loader = _loader()
+
+    stats = run_sync(
+        settings,
+        client,
+        loader,
+        state,
+        "incremental",
+        entity="soundlinks",
+        today=date(2026, 8, 28),
+    )
+
+    assert len(stats.errors) == 1
+    client.export_metrics_jsonl.assert_not_called()
+    assert state.get("last_sync_soundlinks") is None
+
+
+def test_run_sync_soundlinks_incremental_uses_shared_lookback_not_min_created(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    state = StateStore(settings.state_path)
+    client = MagicMock()
+    client.iter_soundlinks.return_value = iter(
+        [
+            _soundlink("sl-old", created=date(2025, 1, 1)),
+            _soundlink("sl-new", created=date(2026, 8, 20)),
+        ]
+    )
+    client.export_metrics_jsonl.return_value = ([], 0)
+    client.export_soundlink_metrics_batch_jsonl.return_value = ([], 0)
+    loader = _loader()
+
+    run_sync(
+        settings,
+        client,
+        loader,
+        state,
+        "incremental",
+        entity="soundlinks",
+        today=date(2026, 8, 28),
+    )
+
+    breakdown = next(
+        call
+        for call in client.export_soundlink_metrics_batch_jsonl.call_args_list
+        if call.kwargs["kind"] == "breakdown"
+    )
+    # lookback_days=10 → 2026-08-19 .. 2026-08-28 (not from 2025-01-01)
+    assert breakdown.kwargs["start_date"] == date(2026, 8, 19)
+    assert breakdown.kwargs["end_date"] == date(2026, 8, 28)
+
+
 def test_run_sync_soundlinks_partial_engagement_failure_marks_only_failed_id(
     tmp_path: Path,
 ) -> None:

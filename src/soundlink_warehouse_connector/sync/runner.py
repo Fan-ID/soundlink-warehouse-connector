@@ -116,6 +116,90 @@ def _chunk(items: list[str], size: int) -> list[list[str]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
+# Epoch floor for shared incremental lookback (batch API needs one window).
+_BATCH_INCREMENTAL_CREATED_FLOOR = date(1970, 1, 1)
+
+
+def _soundlink_batch_windows(
+    created_dates: list[date],
+    *,
+    mode: SyncMode,
+    today: date,
+    lookback_days: int,
+) -> list[tuple[date, date]]:
+    """
+    Shared metric windows for one soundlink ID batch.
+
+    Incremental uses the lookback only (not min(createdAt)), so newer IDs in a
+    mixed batch do not pull a wider history. Full sync still starts at the
+    earliest created date in the batch.
+    """
+    if not created_dates:
+        return []
+    created = (
+        _BATCH_INCREMENTAL_CREATED_FLOOR if mode == "incremental" else min(created_dates)
+    )
+    return metric_windows(
+        created,
+        mode=mode,
+        today=today,
+        lookback_days=lookback_days,
+    )
+
+
+def _is_premium_plan_required(exc: BaseException) -> bool:
+    if not isinstance(exc, SoundlinkApiError):
+        return False
+    if exc.status_code != 403:
+        return False
+    haystack = f"{exc} {exc.body or ''}".lower()
+    return "premium_plan_required" in haystack
+
+
+def _sync_soundlink_retention_batch(
+    client: SoundlinkClient,
+    loader: WarehouseLoader,
+    stats: SyncStats,
+    *,
+    batch_ids: list[str],
+    start_date: date,
+    end_date: date,
+    batch_label: str,
+) -> None:
+    """
+    Retention is best-effort relative to breakdown.
+
+    Premium-plan 403 is skipped (warn only). Other retention failures are logged
+    but do not mark the batch failed — breakdown may already be persisted.
+    """
+    try:
+        retention_rows, _ = client.export_soundlink_metrics_batch_jsonl(
+            kind="retention",
+            soundlink_ids=batch_ids,
+            start_date=start_date,
+            end_date=end_date,
+            group_by="country",
+        )
+        stats.retention_rows += loader.upsert_soundlink_retention_rows(retention_rows)
+        logger.info(
+            "Synced %s: retention=%s",
+            batch_label,
+            len(retention_rows),
+        )
+    except Exception as exc:
+        if _is_premium_plan_required(exc):
+            logger.warning(
+                "Skipping retention for %s (premium plan required)",
+                batch_label,
+            )
+            return
+        # Soft-fail: breakdown may already be persisted; do not block last_sync.
+        logger.exception(
+            "Failed to sync retention batch %s (continuing without retention)",
+            batch_label,
+        )
+
+
 def _save_progress(
     state: StateStore,
     run_key: str,
@@ -354,9 +438,8 @@ def _run_soundlink_sync(
 
     for batch_ids in _chunk(pending_ids, SOUNDLINK_BATCH_SIZE):
         batch = [by_id[sid] for sid in batch_ids]
-        earliest_created = min(s.created_date for s in batch)
-        windows = metric_windows(
-            earliest_created,
+        windows = _soundlink_batch_windows(
+            [s.created_date for s in batch],
             mode=mode,
             today=sync_day,
             lookback_days=settings.incremental_lookback_days,
@@ -364,10 +447,8 @@ def _run_soundlink_sync(
         if not windows:
             stats.entities_skipped += len(batch_ids)
             logger.info(
-                "Skipping metrics for %s soundlink(s) (no overlap with sync window; "
-                "earliest created %s)",
+                "Skipping metrics for %s soundlink(s) (no overlap with sync window)",
                 len(batch_ids),
-                earliest_created,
             )
             completed.update(batch_ids)
             if track_org_progress:
@@ -380,6 +461,7 @@ def _run_soundlink_sync(
         for start_date, end_date in windows:
             stats.windows_processed += 1
             batch_label = f"batch[{len(batch_ids)}] [{start_date}..{end_date}]"
+            breakdown_ok = False
             try:
                 breakdown_rows, _ = client.export_soundlink_metrics_batch_jsonl(
                     kind="breakdown",
@@ -390,47 +472,48 @@ def _run_soundlink_sync(
                 stats.breakdown_rows += loader.upsert_soundlink_breakdown_rows(
                     breakdown_rows
                 )
-
-                retention_rows, _ = client.export_soundlink_metrics_batch_jsonl(
-                    kind="retention",
-                    soundlink_ids=batch_ids,
-                    start_date=start_date,
-                    end_date=end_date,
-                    group_by="country",
-                )
-                stats.retention_rows += loader.upsert_soundlink_retention_rows(
-                    retention_rows
-                )
-
+                breakdown_ok = True
                 logger.info(
-                    "Synced %s: breakdown=%s retention=%s",
+                    "Synced %s: breakdown=%s",
                     batch_label,
                     len(breakdown_rows),
-                    len(retention_rows),
                 )
             except Exception as exc:
                 failed_ids.update(batch_ids)
-                message = f"{batch_label}: {exc}"
-                logger.exception("Failed to sync batch window %s", batch_label)
+                message = f"{batch_label} breakdown: {exc}"
+                logger.exception("Failed to sync breakdown batch %s", batch_label)
                 stats.errors.append(message)
 
-            for sid in batch_ids:
-                label = f"{sid} [{start_date}..{end_date}]"
-                try:
-                    engagement_rows, _ = client.export_metrics_jsonl(
-                        soundlink_id=sid,
-                        kind="engagement",
-                        start_date=start_date,
-                        end_date=end_date,
-                    )
-                    stats.engagement_rows += loader.upsert_soundlink_engagement_rows(
-                        engagement_rows
-                    )
-                except Exception as exc:
-                    failed_ids.add(sid)
-                    message = f"{label}: {exc}"
-                    logger.exception("Failed to sync engagement window %s", label)
-                    stats.errors.append(message)
+            if breakdown_ok:
+                _sync_soundlink_retention_batch(
+                    client,
+                    loader,
+                    stats,
+                    batch_ids=batch_ids,
+                    start_date=start_date,
+                    end_date=end_date,
+                    batch_label=batch_label,
+                )
+
+                for sid in batch_ids:
+                    if sid in failed_ids:
+                        continue
+                    label = f"{sid} [{start_date}..{end_date}]"
+                    try:
+                        engagement_rows, _ = client.export_metrics_jsonl(
+                            soundlink_id=sid,
+                            kind="engagement",
+                            start_date=start_date,
+                            end_date=end_date,
+                        )
+                        stats.engagement_rows += loader.upsert_soundlink_engagement_rows(
+                            engagement_rows
+                        )
+                    except Exception as exc:
+                        failed_ids.add(sid)
+                        message = f"{label}: {exc}"
+                        logger.exception("Failed to sync engagement window %s", label)
+                        stats.errors.append(message)
 
         batch_completed = set(batch_ids) - failed_ids
         if batch_completed:
@@ -503,6 +586,7 @@ def _finish_sync(
     else:
         payload["soundlinks"] = stats.entities_synced
         payload["soundlink_id"] = single_id
+        payload["retention_rows"] = stats.retention_rows
 
     state.set(_last_sync_key(entity), payload)
     if track_org_progress:
