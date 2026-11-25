@@ -126,7 +126,7 @@ class SoundlinkRetentionRow(BaseModel):
     account_id: str
     cohort_date: date
     soundlink_id: str
-    country_code: str | None = None
+    country_code: str
     schema_version: str | None = None
 
 

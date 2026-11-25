@@ -102,6 +102,10 @@ def sync(
         f"{retention_suffix}"
         f"windows={stats.windows_processed}"
     )
+    if stats.soft_errors:
+        typer.echo(f"Soft errors ({len(stats.soft_errors)}):", err=True)
+        for err in stats.soft_errors:
+            typer.echo(f"  - {err}", err=True)
     if stats.errors:
         typer.echo(f"Errors ({len(stats.errors)}):", err=True)
         for err in stats.errors:

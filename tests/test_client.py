@@ -9,6 +9,7 @@ import pytest
 import respx
 from pydantic import ValidationError
 
+from soundlink_warehouse_connector.client.models import validate_soundlink_retention_row
 from soundlink_warehouse_connector.client.soundlink import SoundlinkApiError, SoundlinkClient
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -252,6 +253,13 @@ def test_export_soundlink_metrics_batch_jsonl_rejects_too_many_ids() -> None:
                 start_date=date(2026, 8, 1),
                 end_date=date(2026, 8, 28),
             )
+
+
+def test_validate_soundlink_retention_row_requires_country_code() -> None:
+    row = json.loads((FIXTURES / "soundlink_retention.jsonl").read_text().splitlines()[0])
+    row.pop("country_code")
+    with pytest.raises(ValidationError):
+        validate_soundlink_retention_row(row)
 
 
 @respx.mock

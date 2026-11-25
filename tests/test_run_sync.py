@@ -413,6 +413,7 @@ def test_run_sync_soundlinks_premium_retention_does_not_fail_sync(
     )
 
     assert stats.errors == []
+    assert stats.soft_errors == []
     assert stats.retention_rows == 0
     assert loader.upsert_soundlink_breakdown_rows.called
     assert not loader.upsert_soundlink_retention_rows.called
@@ -420,6 +421,44 @@ def test_run_sync_soundlinks_premium_retention_does_not_fail_sync(
     last = state.get("last_sync_soundlinks")
     assert last is not None
     assert last["retention_rows"] == 0
+    assert last["breakdown_rows"] == 1
+
+
+def test_run_sync_soundlinks_retention_soft_error_still_completes(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    state = StateStore(settings.state_path)
+    client = MagicMock()
+    client.iter_soundlinks.return_value = iter([_soundlink("sl-1")])
+    client.export_metrics_jsonl.return_value = ([], 0)
+
+    def _batch(*, kind: str, **_kwargs: object) -> tuple[list, int]:
+        if kind == "retention":
+            raise RuntimeError("retention boom")
+        return [{"soundlink_id": "sl-1"}], 1
+
+    client.export_soundlink_metrics_batch_jsonl.side_effect = _batch
+    loader = _loader()
+
+    stats = run_sync(
+        settings,
+        client,
+        loader,
+        state,
+        "incremental",
+        entity="soundlinks",
+        today=date(2026, 8, 28),
+    )
+
+    assert stats.errors == []
+    assert len(stats.soft_errors) == 1
+    assert "retention (soft)" in stats.soft_errors[0]
+    assert loader.upsert_soundlink_breakdown_rows.called
+    assert client.export_metrics_jsonl.call_count == 1
+    last = state.get("last_sync_soundlinks")
+    assert last is not None
+    assert last["soft_error_count"] == 1
     assert last["breakdown_rows"] == 1
 
 

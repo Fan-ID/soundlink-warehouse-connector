@@ -30,6 +30,7 @@ class SyncStats:
     retention_rows: int = 0
     windows_processed: int = 0
     errors: list[str] = field(default_factory=list)
+    soft_errors: list[str] = field(default_factory=list)
 
     # Back-compat aliases used by existing campaign CLI output / tests.
     @property
@@ -181,10 +182,12 @@ def _sync_soundlink_retention_batch(
                 batch_label,
             )
             return
+        message = f"{batch_label} retention (soft): {exc}"
         logger.exception(
             "Failed to sync retention batch %s (continuing without retention)",
             batch_label,
         )
+        stats.soft_errors.append(message)
 
 
 def _save_progress(
@@ -574,6 +577,8 @@ def _finish_sync(
         payload["soundlinks"] = stats.entities_synced
         payload["soundlink_id"] = single_id
         payload["retention_rows"] = stats.retention_rows
+        if stats.soft_errors:
+            payload["soft_error_count"] = len(stats.soft_errors)
 
     state.set(_last_sync_key(entity), payload)
     if track_org_progress:
