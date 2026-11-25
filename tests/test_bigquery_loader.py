@@ -8,6 +8,8 @@ from soundlink_warehouse_connector.loaders.bigquery_schema import (
     BREAKDOWN_SCHEMA,
     CAMPAIGNS_PK,
     CAMPAIGNS_SCHEMA,
+    SOUNDLINK_RETENTION_PK,
+    SOUNDLINK_RETENTION_SCHEMA,
     merge_sql,
 )
 
@@ -37,6 +39,25 @@ def test_merge_sql_breakdown_pk() -> None:
     for col in BREAKDOWN_PK:
         assert f"T.`{col}` = S.`{col}`" in sql
     assert "T.`cpl` = S.`cpl`" in sql
+
+
+def test_merge_sql_soundlink_retention_pk() -> None:
+    sql = merge_sql(
+        target="p.d.soundlink_cohort_retention_daily",
+        staging="p.d.stg",
+        schema=SOUNDLINK_RETENTION_SCHEMA,
+        pk=SOUNDLINK_RETENTION_PK,
+    )
+    for col in SOUNDLINK_RETENTION_PK:
+        assert f"T.`{col}` = S.`{col}`" in sql
+    assert "T.`cohort_size` = S.`cohort_size`" in sql
+
+
+def test_upsert_soundlink_retention_rows_empty_short_circuits() -> None:
+    client = MagicMock()
+    loader = BigQueryLoader(project="p", dataset="d", client=client)
+    assert loader.upsert_soundlink_retention_rows([]) == 0
+    client.load_table_from_json.assert_not_called()
 
 
 def test_upsert_breakdown_empty_short_circuits() -> None:

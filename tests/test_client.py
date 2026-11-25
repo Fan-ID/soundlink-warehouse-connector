@@ -9,6 +9,7 @@ import pytest
 import respx
 from pydantic import ValidationError
 
+from soundlink_warehouse_connector.client.models import validate_soundlink_retention_row
 from soundlink_warehouse_connector.client.soundlink import SoundlinkApiError, SoundlinkClient
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -181,6 +182,105 @@ def test_get_campaign() -> None:
         campaign = client.get_campaign(campaign_id)
     assert campaign.campaign_id == campaign_id
     assert campaign.strategy_type == "maximum_growth"
+
+
+@respx.mock
+def test_export_soundlink_metrics_batch_jsonl_breakdown() -> None:
+    soundlink_ids = ["V1StGXR8_Z5jdHi6B-myT", "7c9e6679-7425-40de-944b-e07fc1f90ae7"]
+    breakdown_body = (FIXTURES / "soundlink_breakdown.jsonl").read_text(encoding="utf-8")
+    route = respx.post(f"{BASE_URL}/v1/soundlinks/metrics/breakdown/export/batch").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"X-Row-Count": "2", "Content-Type": "application/x-ndjson"},
+            content=breakdown_body.encode(),
+        )
+    )
+    with SoundlinkClient(api_key=API_KEY, base_url=BASE_URL, max_retries=0) as client:
+        rows, count = client.export_soundlink_metrics_batch_jsonl(
+            kind="breakdown",
+            soundlink_ids=soundlink_ids,
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 28),
+        )
+
+    assert count == 2
+    assert len(rows) == 2
+    assert route.called
+    request = route.calls[0].request
+    assert request.headers["Accept"] == "application/x-ndjson"
+    body = json.loads(request.content)
+    assert body["soundlinkIds"] == soundlink_ids
+    assert body["startDate"] == "2026-08-01"
+    assert body["endDate"] == "2026-08-28"
+    assert "groupBy" not in body
+
+
+@respx.mock
+def test_export_soundlink_metrics_batch_jsonl_retention_group_by_country() -> None:
+    soundlink_ids = ["V1StGXR8_Z5jdHi6B-myT"]
+    retention_body = (FIXTURES / "soundlink_retention.jsonl").read_text(encoding="utf-8")
+    route = respx.post(f"{BASE_URL}/v1/soundlinks/metrics/retention/export/batch").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"X-Row-Count": "2", "Content-Type": "application/x-ndjson"},
+            content=retention_body.encode(),
+        )
+    )
+    with SoundlinkClient(api_key=API_KEY, base_url=BASE_URL, max_retries=0) as client:
+        rows, count = client.export_soundlink_metrics_batch_jsonl(
+            kind="retention",
+            soundlink_ids=soundlink_ids,
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 28),
+            group_by="country",
+        )
+
+    assert count == 2
+    assert len(rows) == 2
+    assert rows[0]["country_code"] == "US"
+    assert rows[0]["schema_version"] == "1.1"
+    request = route.calls[0].request
+    body = json.loads(request.content)
+    assert body["groupBy"] == "country"
+
+
+def test_export_soundlink_metrics_batch_jsonl_rejects_too_many_ids() -> None:
+    with SoundlinkClient(api_key=API_KEY, base_url=BASE_URL, max_retries=0) as client:
+        with pytest.raises(ValueError, match="max batch size"):
+            client.export_soundlink_metrics_batch_jsonl(
+                kind="breakdown",
+                soundlink_ids=[f"sl-{i}" for i in range(51)],
+                start_date=date(2026, 8, 1),
+                end_date=date(2026, 8, 28),
+            )
+
+
+def test_validate_soundlink_retention_row_requires_country_code() -> None:
+    row = json.loads((FIXTURES / "soundlink_retention.jsonl").read_text().splitlines()[0])
+    row.pop("country_code")
+    with pytest.raises(ValidationError):
+        validate_soundlink_retention_row(row)
+
+
+@respx.mock
+def test_export_soundlink_metrics_batch_row_count_mismatch_fails() -> None:
+    retention_body = (FIXTURES / "soundlink_retention.jsonl").read_text(encoding="utf-8")
+    respx.post(f"{BASE_URL}/v1/soundlinks/metrics/retention/export/batch").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"X-Row-Count": "99"},
+            content=retention_body.encode(),
+        )
+    )
+    with SoundlinkClient(api_key=API_KEY, base_url=BASE_URL, max_retries=0) as client:
+        with pytest.raises(SoundlinkApiError, match="X-Row-Count mismatch"):
+            client.export_soundlink_metrics_batch_jsonl(
+                kind="retention",
+                soundlink_ids=["V1StGXR8_Z5jdHi6B-myT"],
+                start_date=date(2026, 8, 1),
+                end_date=date(2026, 8, 28),
+                group_by="country",
+            )
 
 
 @respx.mock

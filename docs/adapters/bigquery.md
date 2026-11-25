@@ -40,12 +40,12 @@ SOUNDLINK_API_KEY=sk_...
 | Step        | Detail                                                             |
 | ----------- | ------------------------------------------------------------------ |
 | Dataset     | Created if missing (`exists_ok`)                                   |
-| Tables      | Campaigns: `campaigns`, `campaign_country_daily`, `campaign_engagement_daily`. Soundlinks: `soundlinks`, `soundlink_country_daily`, `soundlink_engagement_daily` |
+| Tables      | Campaigns: `campaigns`, `campaign_country_daily`, `campaign_engagement_daily`. Soundlinks: `soundlinks`, `soundlink_country_daily`, `soundlink_cohort_retention_daily`, `soundlink_engagement_daily` |
 | Schema      | Existing tables: missing columns are **added** (nullable)          |
 | Upsert      | Load NDJSON → temp staging table → `MERGE` on PK → drop staging    |
 | Staging TTL | Table expiration ~1 day (cleanup safety net)                       |
 
-Primary keys match the Public API docs (`campaign_*` / `soundlink_*` daily schemas v1.0).
+Primary keys match the Public API docs (`campaign_*` / `soundlink_*` daily schemas v1.0; `soundlink_cohort_retention_daily` is v1.1).
 
 ## Sync
 

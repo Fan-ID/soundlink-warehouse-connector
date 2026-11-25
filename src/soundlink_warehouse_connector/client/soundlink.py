@@ -17,6 +17,7 @@ from tenacity import (
 
 from soundlink_warehouse_connector import __version__
 from soundlink_warehouse_connector.client.models import (
+    EXPECTED_RETENTION_SCHEMA_VERSION,
     EXPECTED_SCHEMA_VERSION,
     CampaignSummary,
     Pagination,
@@ -25,12 +26,14 @@ from soundlink_warehouse_connector.client.models import (
     validate_engagement_row,
     validate_soundlink_breakdown_row,
     validate_soundlink_engagement_row,
+    validate_soundlink_retention_row,
 )
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CAMPAIGNS_PAGE_SIZE = 25
 DEFAULT_SOUNDLINKS_PAGE_SIZE = 25
+MAX_BATCH_SOUNDLINK_IDS = 50
 
 
 class SoundlinkApiError(Exception):
@@ -80,14 +83,16 @@ def _wait_retry_after_or_backoff(retry_state: RetryCallState) -> float:
     return wait_exponential_jitter(initial=1, max=60)(retry_state)
 
 
-def _warn_schema_version(row: dict[str, Any], *, kind: str) -> None:
+def _warn_schema_version(
+    row: dict[str, Any], *, kind: str, expected: str = EXPECTED_SCHEMA_VERSION
+) -> None:
     version = row.get("schema_version")
-    if version is not None and version != EXPECTED_SCHEMA_VERSION:
+    if version is not None and version != expected:
         logger.warning(
             "Unexpected %s schema_version=%r (expected %r)",
             kind,
             version,
-            EXPECTED_SCHEMA_VERSION,
+            expected,
         )
 
 
@@ -262,6 +267,78 @@ class SoundlinkClient:
             "endDate": end_date.isoformat(),
         }
 
+        return self._fetch_ndjson(
+            "GET",
+            path,
+            params=params,
+            validate=validate,
+            kind=kind,
+            expected_schema_version=EXPECTED_SCHEMA_VERSION,
+            error_label=f"{kind} {entity_id}",
+        )
+
+    def export_soundlink_metrics_batch_jsonl(
+        self,
+        *,
+        kind: str,
+        soundlink_ids: list[str],
+        start_date: date,
+        end_date: date,
+        group_by: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        """Stream batch JSONL for up to 50 soundlink IDs; retries like export_metrics_jsonl."""
+        if not soundlink_ids:
+            raise ValueError("soundlink_ids must not be empty")
+        if len(soundlink_ids) > MAX_BATCH_SOUNDLINK_IDS:
+            raise ValueError(
+                f"soundlink_ids has {len(soundlink_ids)} entries; "
+                f"max batch size is {MAX_BATCH_SOUNDLINK_IDS}"
+            )
+
+        if kind == "breakdown":
+            path = "/v1/soundlinks/metrics/breakdown/export/batch"
+            validate = validate_soundlink_breakdown_row
+            expected_schema_version = EXPECTED_SCHEMA_VERSION
+        elif kind == "retention":
+            path = "/v1/soundlinks/metrics/retention/export/batch"
+            validate = validate_soundlink_retention_row
+            expected_schema_version = EXPECTED_RETENTION_SCHEMA_VERSION
+        else:
+            raise ValueError(f"Unknown batch export kind: {kind}")
+
+        if group_by is not None and kind != "retention":
+            raise ValueError("group_by is only supported for kind='retention'")
+
+        body: dict[str, Any] = {
+            "soundlinkIds": soundlink_ids,
+            "startDate": start_date.isoformat(),
+            "endDate": end_date.isoformat(),
+        }
+        if group_by is not None:
+            body["groupBy"] = group_by
+
+        return self._fetch_ndjson(
+            "POST",
+            path,
+            json_body=body,
+            validate=validate,
+            kind=kind,
+            expected_schema_version=expected_schema_version,
+            error_label=f"{kind} batch ({len(soundlink_ids)} ids)",
+        )
+
+    def _fetch_ndjson(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        json_body: dict[str, Any] | None = None,
+        validate: Any,
+        kind: str,
+        expected_schema_version: str,
+        error_label: str,
+    ) -> tuple[list[dict[str, Any]], int | None]:
         @retry(
             retry=retry_if_exception(_is_retryable),
             stop=stop_after_attempt(self._max_retries + 1),
@@ -270,9 +347,10 @@ class SoundlinkClient:
         )
         def _fetch() -> tuple[list[dict[str, Any]], int | None]:
             request = self._client.build_request(
-                "GET",
+                method,
                 path,
                 params=params,
+                json=json_body,
                 headers={"Accept": "application/x-ndjson"},
             )
             response = self._client.send(request, stream=True)
@@ -283,7 +361,7 @@ class SoundlinkClient:
                 )
                 response.close()
                 raise SoundlinkApiError(
-                    f"GET {path} failed with {response.status_code}",
+                    f"{method} {path} failed with {response.status_code}",
                     status_code=response.status_code,
                     body=body,
                     retry_after=retry_after,
@@ -299,12 +377,12 @@ class SoundlinkClient:
                         continue
                     raw = json.loads(line)
                     validate(raw)
-                    _warn_schema_version(raw, kind=kind)
+                    _warn_schema_version(raw, kind=kind, expected=expected_schema_version)
                     rows.append(raw)
 
                 if expected is not None and expected != len(rows):
                     raise SoundlinkApiError(
-                        f"X-Row-Count mismatch for {kind} {entity_id}: "
+                        f"X-Row-Count mismatch for {error_label}: "
                         f"header={expected} parsed={len(rows)}",
                         retryable=True,
                     )

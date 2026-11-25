@@ -126,6 +126,13 @@ SOUNDLINK_ENGAGEMENT_PK: tuple[str, ...] = (
     "country_code",
     "engaged_spotify_track_id",
 )
+SOUNDLINK_RETENTION_PK: tuple[str, ...] = (
+    "provider",
+    "account_id",
+    "cohort_date",
+    "soundlink_id",
+    "country_code",
+)
 
 SOUNDLINKS_COLUMNS: tuple[str, ...] = (
     "soundlink_id",
@@ -195,6 +202,47 @@ SOUNDLINK_ENGAGEMENT_COLUMNS: tuple[str, ...] = (
     "returning_listener_streams",
     "streams",
     "spl",
+    "raw_json",
+    "synced_at",
+)
+
+
+SOUNDLINK_RETENTION_COLUMNS: tuple[str, ...] = (
+    "provider",
+    "account_id",
+    "cohort_date",
+    "soundlink_id",
+    "country_code",
+    "schema_version",
+    "cohort_date_timezone",
+    "exported_at",
+    "soundlink_name",
+    "soundlink_target_type",
+    "soundlink_target_isrc",
+    "soundlink_target_spotify_track_id",
+    "soundlink_target_playlist_id",
+    "cohort_size",
+    "returned_on_day_1",
+    "retention_by_day_1",
+    "streams_on_day_1",
+    "returned_on_day_2",
+    "retention_by_day_2",
+    "streams_on_day_2",
+    "returned_on_day_3",
+    "retention_by_day_3",
+    "streams_on_day_3",
+    "returned_on_day_4",
+    "retention_by_day_4",
+    "streams_on_day_4",
+    "returned_on_day_5",
+    "retention_by_day_5",
+    "streams_on_day_5",
+    "returned_on_day_6",
+    "retention_by_day_6",
+    "streams_on_day_6",
+    "returned_on_day_7",
+    "retention_by_day_7",
+    "streams_on_day_7",
     "raw_json",
     "synced_at",
 )
@@ -374,6 +422,34 @@ def soundlink_engagement_record(
         "raw_json": dict(row),
         "synced_at": synced_at,
     }
+
+
+def soundlink_retention_record(
+    row: dict[str, Any], synced_at: datetime | str
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "provider": row["provider"],
+        "account_id": row["account_id"],
+        "cohort_date": row["cohort_date"],
+        "soundlink_id": row["soundlink_id"],
+        "country_code": row["country_code"],
+        "schema_version": row.get("schema_version"),
+        "cohort_date_timezone": row.get("cohort_date_timezone"),
+        "exported_at": row.get("exported_at"),
+        "soundlink_name": row.get("soundlink_name"),
+        "soundlink_target_type": row.get("soundlink_target_type"),
+        "soundlink_target_isrc": row.get("soundlink_target_isrc"),
+        "soundlink_target_spotify_track_id": row.get("soundlink_target_spotify_track_id"),
+        "soundlink_target_playlist_id": row.get("soundlink_target_playlist_id"),
+        "cohort_size": row.get("cohort_size"),
+        "raw_json": dict(row),
+        "synced_at": synced_at,
+    }
+    for day in range(1, 8):
+        record[f"returned_on_day_{day}"] = row.get(f"returned_on_day_{day}")
+        record[f"retention_by_day_{day}"] = row.get(f"retention_by_day_{day}")
+        record[f"streams_on_day_{day}"] = row.get(f"streams_on_day_{day}")
+    return record
 
 
 def as_tuple(record: dict[str, Any], columns: tuple[str, ...]) -> tuple[Any, ...]:

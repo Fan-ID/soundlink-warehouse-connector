@@ -21,6 +21,8 @@ from soundlink_warehouse_connector.loaders.bigquery_schema import (
     SOUNDLINK_BREAKDOWN_SCHEMA,
     SOUNDLINK_ENGAGEMENT_PK,
     SOUNDLINK_ENGAGEMENT_SCHEMA,
+    SOUNDLINK_RETENTION_PK,
+    SOUNDLINK_RETENTION_SCHEMA,
     SOUNDLINKS_PK,
     SOUNDLINKS_SCHEMA,
     merge_sql,
@@ -33,6 +35,7 @@ from soundlink_warehouse_connector.loaders.columns import (
     soundlink_breakdown_record,
     soundlink_engagement_record,
     soundlink_record,
+    soundlink_retention_record,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,6 +85,7 @@ class BigQueryLoader(WarehouseLoader):
         self._ensure_table("soundlinks", SOUNDLINKS_SCHEMA)
         self._ensure_table("soundlink_country_daily", SOUNDLINK_BREAKDOWN_SCHEMA)
         self._ensure_table("soundlink_engagement_daily", SOUNDLINK_ENGAGEMENT_SCHEMA)
+        self._ensure_table("soundlink_cohort_retention_daily", SOUNDLINK_RETENTION_SCHEMA)
 
     def _table_id(self, name: str) -> str:
         return f"{self._dataset_ref}.{name}"
@@ -164,6 +168,18 @@ class BigQueryLoader(WarehouseLoader):
             "soundlink_engagement_daily",
             SOUNDLINK_ENGAGEMENT_SCHEMA,
             SOUNDLINK_ENGAGEMENT_PK,
+            prepared,
+        )
+
+    def upsert_soundlink_retention_rows(self, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        synced_at = datetime.now(tz=UTC)
+        prepared = [soundlink_retention_record(row, synced_at) for row in rows]
+        return self._merge_rows(
+            "soundlink_cohort_retention_daily",
+            SOUNDLINK_RETENTION_SCHEMA,
+            SOUNDLINK_RETENTION_PK,
             prepared,
         )
 

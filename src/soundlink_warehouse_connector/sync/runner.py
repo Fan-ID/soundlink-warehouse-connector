@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 SyncMode = Literal["full", "incremental"]
 SyncEntity = Literal["campaigns", "soundlinks"]
 
+SOUNDLINK_BATCH_SIZE = 50
+
 
 @dataclass
 class SyncStats:
@@ -25,8 +27,10 @@ class SyncStats:
     entities_resumed_skip: int = 0
     breakdown_rows: int = 0
     engagement_rows: int = 0
+    retention_rows: int = 0
     windows_processed: int = 0
     errors: list[str] = field(default_factory=list)
+    soft_errors: list[str] = field(default_factory=list)
 
     # Back-compat aliases used by existing campaign CLI output / tests.
     @property
@@ -107,6 +111,83 @@ def _completed_ids(state: StateStore, key: str, field: str) -> set[str]:
     if not isinstance(raw, list):
         return set()
     return {str(x) for x in raw}
+
+
+def _chunk(items: list[str], size: int) -> list[list[str]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+_BATCH_INCREMENTAL_CREATED_FLOOR = date(1970, 1, 1)
+
+
+def _soundlink_batch_windows(
+    created_dates: list[date],
+    *,
+    mode: SyncMode,
+    today: date,
+    lookback_days: int,
+) -> list[tuple[date, date]]:
+    """Shared date windows for a soundlink ID batch (incremental = lookback only)."""
+    if not created_dates:
+        return []
+    created = (
+        _BATCH_INCREMENTAL_CREATED_FLOOR if mode == "incremental" else min(created_dates)
+    )
+    return metric_windows(
+        created,
+        mode=mode,
+        today=today,
+        lookback_days=lookback_days,
+    )
+
+
+def _is_premium_plan_required(exc: BaseException) -> bool:
+    if not isinstance(exc, SoundlinkApiError):
+        return False
+    if exc.status_code != 403:
+        return False
+    haystack = f"{exc} {exc.body or ''}".lower()
+    return "premium_plan_required" in haystack
+
+
+def _sync_soundlink_retention_batch(
+    client: SoundlinkClient,
+    loader: WarehouseLoader,
+    stats: SyncStats,
+    *,
+    batch_ids: list[str],
+    start_date: date,
+    end_date: date,
+    batch_label: str,
+) -> None:
+    """Fetch retention; skip on premium 403 / other errors without failing the batch."""
+    try:
+        retention_rows, _ = client.export_soundlink_metrics_batch_jsonl(
+            kind="retention",
+            soundlink_ids=batch_ids,
+            start_date=start_date,
+            end_date=end_date,
+            group_by="country",
+        )
+        stats.retention_rows += loader.upsert_soundlink_retention_rows(retention_rows)
+        logger.info(
+            "Synced %s: retention=%s",
+            batch_label,
+            len(retention_rows),
+        )
+    except Exception as exc:
+        if _is_premium_plan_required(exc):
+            logger.warning(
+                "Skipping retention for %s (premium plan required)",
+                batch_label,
+            )
+            return
+        message = f"{batch_label} retention (soft): {exc}"
+        logger.exception(
+            "Failed to sync retention batch %s (continuing without retention)",
+            batch_label,
+        )
+        stats.soft_errors.append(message)
 
 
 def _save_progress(
@@ -335,75 +416,98 @@ def _run_soundlink_sync(
     )
     completed = set(already_done)
 
-    for soundlink in soundlinks:
-        if soundlink.soundlink_id in already_done:
-            stats.entities_resumed_skip += 1
-            logger.info(
-                "Resume: skipping %s (already completed in %s)",
-                soundlink.soundlink_id,
-                run_key,
-            )
-            continue
+    by_id = {s.soundlink_id: s for s in soundlinks}
+    pending_ids = [s.soundlink_id for s in soundlinks if s.soundlink_id not in already_done]
+    stats.entities_resumed_skip = len(soundlinks) - len(pending_ids)
+    if stats.entities_resumed_skip:
+        logger.info(
+            "Resume: skipping %s soundlink(s) already completed in %s",
+            stats.entities_resumed_skip,
+            run_key,
+        )
 
-        windows = metric_windows(
-            soundlink.created_date,
+    for batch_ids in _chunk(pending_ids, SOUNDLINK_BATCH_SIZE):
+        batch = [by_id[sid] for sid in batch_ids]
+        windows = _soundlink_batch_windows(
+            [s.created_date for s in batch],
             mode=mode,
             today=sync_day,
             lookback_days=settings.incremental_lookback_days,
         )
         if not windows:
-            stats.entities_skipped += 1
+            stats.entities_skipped += len(batch_ids)
             logger.info(
-                "Skipping metrics for %s (no overlap with sync window; created %s)",
-                soundlink.soundlink_id,
-                soundlink.created_date,
+                "Skipping metrics for %s soundlink(s) (no overlap with sync window)",
+                len(batch_ids),
             )
-            completed.add(soundlink.soundlink_id)
+            completed.update(batch_ids)
             if track_org_progress:
                 _save_progress(
                     state, run_key, entity=entity, mode=mode, completed=completed
                 )
             continue
 
-        entity_ok = True
+        failed_ids: set[str] = set()
         for start_date, end_date in windows:
             stats.windows_processed += 1
-            label = f"{soundlink.soundlink_id} [{start_date}..{end_date}]"
+            batch_label = f"batch[{len(batch_ids)}] [{start_date}..{end_date}]"
+            breakdown_ok = False
             try:
-                breakdown_rows, _ = client.export_metrics_jsonl(
-                    soundlink_id=soundlink.soundlink_id,
+                breakdown_rows, _ = client.export_soundlink_metrics_batch_jsonl(
                     kind="breakdown",
+                    soundlink_ids=batch_ids,
                     start_date=start_date,
                     end_date=end_date,
                 )
                 stats.breakdown_rows += loader.upsert_soundlink_breakdown_rows(
                     breakdown_rows
                 )
-
-                engagement_rows, _ = client.export_metrics_jsonl(
-                    soundlink_id=soundlink.soundlink_id,
-                    kind="engagement",
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-                stats.engagement_rows += loader.upsert_soundlink_engagement_rows(
-                    engagement_rows
-                )
-
+                breakdown_ok = True
                 logger.info(
-                    "Synced %s: breakdown=%s engagement=%s",
-                    label,
+                    "Synced %s: breakdown=%s",
+                    batch_label,
                     len(breakdown_rows),
-                    len(engagement_rows),
                 )
             except Exception as exc:
-                entity_ok = False
-                message = f"{label}: {exc}"
-                logger.exception("Failed to sync window %s", label)
+                failed_ids.update(batch_ids)
+                message = f"{batch_label} breakdown: {exc}"
+                logger.exception("Failed to sync breakdown batch %s", batch_label)
                 stats.errors.append(message)
 
-        if entity_ok:
-            completed.add(soundlink.soundlink_id)
+            if breakdown_ok:
+                _sync_soundlink_retention_batch(
+                    client,
+                    loader,
+                    stats,
+                    batch_ids=batch_ids,
+                    start_date=start_date,
+                    end_date=end_date,
+                    batch_label=batch_label,
+                )
+
+                for sid in batch_ids:
+                    if sid in failed_ids:
+                        continue
+                    label = f"{sid} [{start_date}..{end_date}]"
+                    try:
+                        engagement_rows, _ = client.export_metrics_jsonl(
+                            soundlink_id=sid,
+                            kind="engagement",
+                            start_date=start_date,
+                            end_date=end_date,
+                        )
+                        stats.engagement_rows += loader.upsert_soundlink_engagement_rows(
+                            engagement_rows
+                        )
+                    except Exception as exc:
+                        failed_ids.add(sid)
+                        message = f"{label}: {exc}"
+                        logger.exception("Failed to sync engagement window %s", label)
+                        stats.errors.append(message)
+
+        batch_completed = set(batch_ids) - failed_ids
+        if batch_completed:
+            completed.update(batch_completed)
             if track_org_progress:
                 _save_progress(
                     state, run_key, entity=entity, mode=mode, completed=completed
@@ -472,6 +576,9 @@ def _finish_sync(
     else:
         payload["soundlinks"] = stats.entities_synced
         payload["soundlink_id"] = single_id
+        payload["retention_rows"] = stats.retention_rows
+        if stats.soft_errors:
+            payload["soft_error_count"] = len(stats.soft_errors)
 
     state.set(_last_sync_key(entity), payload)
     if track_org_progress:

@@ -91,6 +91,7 @@ def sync(
         loader.close()
 
     count_label = "campaigns" if entity == "campaigns" else "soundlinks"
+    retention_suffix = f"retention_rows={stats.retention_rows} " if entity == "soundlinks" else ""
     typer.echo(
         f"Done ({mode}, {entity}): destination={settings.destination} "
         f"{count_label}={stats.entities_synced} "
@@ -98,8 +99,13 @@ def sync(
         f"resumed_skip={stats.entities_resumed_skip} "
         f"breakdown_rows={stats.breakdown_rows} "
         f"engagement_rows={stats.engagement_rows} "
+        f"{retention_suffix}"
         f"windows={stats.windows_processed}"
     )
+    if stats.soft_errors:
+        typer.echo(f"Soft errors ({len(stats.soft_errors)}):", err=True)
+        for err in stats.soft_errors:
+            typer.echo(f"  - {err}", err=True)
     if stats.errors:
         typer.echo(f"Errors ({len(stats.errors)}):", err=True)
         for err in stats.errors:
