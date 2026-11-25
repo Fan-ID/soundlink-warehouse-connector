@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 EXPECTED_SCHEMA_VERSION = "1.0"
+EXPECTED_RETENTION_SCHEMA_VERSION = "1.1"
 
 
 class Pagination(BaseModel):
@@ -116,6 +117,19 @@ class SoundlinkEngagementRow(BaseModel):
     schema_version: str | None = None
 
 
+class SoundlinkRetentionRow(BaseModel):
+    """Public API `soundlink_cohort_retention_daily` v1.1 — required PK fields validated."""
+
+    model_config = ConfigDict(extra="allow")
+
+    provider: str
+    account_id: str
+    cohort_date: date
+    soundlink_id: str
+    country_code: str | None = None
+    schema_version: str | None = None
+
+
 def validate_breakdown_row(data: dict[str, Any]) -> dict[str, Any]:
     BreakdownRow.model_validate(data)
     return data
@@ -133,4 +147,9 @@ def validate_soundlink_breakdown_row(data: dict[str, Any]) -> dict[str, Any]:
 
 def validate_soundlink_engagement_row(data: dict[str, Any]) -> dict[str, Any]:
     SoundlinkEngagementRow.model_validate(data)
+    return data
+
+
+def validate_soundlink_retention_row(data: dict[str, Any]) -> dict[str, Any]:
+    SoundlinkRetentionRow.model_validate(data)
     return data

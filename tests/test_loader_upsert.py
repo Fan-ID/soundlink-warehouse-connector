@@ -105,6 +105,30 @@ def test_soundlink_engagement_upsert_is_idempotent(
     assert count == 2
 
 
+def test_soundlink_retention_upsert_is_idempotent(
+    loader: DuckDbLoader, tmp_path: Path
+) -> None:
+    rows = _load_jsonl("soundlink_retention.jsonl")
+    assert loader.upsert_soundlink_retention_rows(rows) == 2
+
+    updated = [{**rows[0], "cohort_size": 999, "retention_by_day_1": 0.9}]
+    assert loader.upsert_soundlink_retention_rows(updated) == 1
+
+    conn = duckdb.connect(str(tmp_path / "test.duckdb"))
+    count = conn.execute(
+        "SELECT COUNT(*) FROM soundlink_cohort_retention_daily"
+    ).fetchone()[0]
+    cohort_size, retention_by_day_1 = conn.execute(
+        "SELECT cohort_size, retention_by_day_1 FROM soundlink_cohort_retention_daily "
+        "WHERE country_code = 'US'"
+    ).fetchone()
+    conn.close()
+
+    assert count == 2
+    assert cohort_size == 999
+    assert retention_by_day_1 == 0.9
+
+
 def test_soundlink_upsert_stores_raw_json(loader: DuckDbLoader, tmp_path: Path) -> None:
     payload = json.loads((FIXTURES / "soundlinks.json").read_text(encoding="utf-8"))
     item = payload["data"]["items"][0]

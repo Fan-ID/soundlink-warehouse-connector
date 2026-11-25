@@ -15,6 +15,7 @@ from soundlink_warehouse_connector.loaders.columns import (
     ENGAGEMENT_COLUMNS,
     SOUNDLINK_BREAKDOWN_COLUMNS,
     SOUNDLINK_ENGAGEMENT_COLUMNS,
+    SOUNDLINK_RETENTION_COLUMNS,
     SOUNDLINKS_COLUMNS,
     as_tuple,
     breakdown_record,
@@ -23,6 +24,7 @@ from soundlink_warehouse_connector.loaders.columns import (
     soundlink_breakdown_record,
     soundlink_engagement_record,
     soundlink_record,
+    soundlink_retention_record,
 )
 
 _CAMPAIGNS_DDL = """
@@ -213,6 +215,49 @@ CREATE TABLE IF NOT EXISTS soundlink_engagement_daily (
 )
 """
 
+_SOUNDLINK_RETENTION_DDL = """
+CREATE TABLE IF NOT EXISTS soundlink_cohort_retention_daily (
+    provider VARCHAR NOT NULL,
+    account_id VARCHAR NOT NULL,
+    cohort_date DATE NOT NULL,
+    soundlink_id VARCHAR NOT NULL,
+    country_code VARCHAR NOT NULL,
+    schema_version VARCHAR,
+    cohort_date_timezone VARCHAR,
+    exported_at TIMESTAMP,
+    soundlink_name VARCHAR,
+    soundlink_target_type VARCHAR,
+    soundlink_target_isrc VARCHAR,
+    soundlink_target_spotify_track_id VARCHAR,
+    soundlink_target_playlist_id VARCHAR,
+    cohort_size BIGINT,
+    returned_on_day_1 BIGINT,
+    retention_by_day_1 DOUBLE,
+    streams_on_day_1 BIGINT,
+    returned_on_day_2 BIGINT,
+    retention_by_day_2 DOUBLE,
+    streams_on_day_2 BIGINT,
+    returned_on_day_3 BIGINT,
+    retention_by_day_3 DOUBLE,
+    streams_on_day_3 BIGINT,
+    returned_on_day_4 BIGINT,
+    retention_by_day_4 DOUBLE,
+    streams_on_day_4 BIGINT,
+    returned_on_day_5 BIGINT,
+    retention_by_day_5 DOUBLE,
+    streams_on_day_5 BIGINT,
+    returned_on_day_6 BIGINT,
+    retention_by_day_6 DOUBLE,
+    streams_on_day_6 BIGINT,
+    returned_on_day_7 BIGINT,
+    retention_by_day_7 DOUBLE,
+    streams_on_day_7 BIGINT,
+    raw_json JSON NOT NULL,
+    synced_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (provider, account_id, cohort_date, soundlink_id, country_code)
+)
+"""
+
 # Columns added after the first MVP schema; safe on existing DuckDB files.
 _BREAKDOWN_MIGRATIONS: list[tuple[str, str]] = [
     ("schema_version", "VARCHAR"),
@@ -262,6 +307,7 @@ class DuckDbLoader(WarehouseLoader):
         self._conn.execute(_SOUNDLINKS_DDL)
         self._conn.execute(_SOUNDLINK_BREAKDOWN_DDL)
         self._conn.execute(_SOUNDLINK_ENGAGEMENT_DDL)
+        self._conn.execute(_SOUNDLINK_RETENTION_DDL)
         self._migrate("campaign_country_daily", _BREAKDOWN_MIGRATIONS)
         self._migrate("campaign_engagement_daily", _ENGAGEMENT_MIGRATIONS)
 
@@ -397,6 +443,27 @@ class DuckDbLoader(WarehouseLoader):
         def _write() -> None:
             self._conn.executemany(
                 f"INSERT OR REPLACE INTO soundlink_engagement_daily ({cols}) "
+                f"VALUES ({placeholders})",
+                values,
+            )
+
+        self._transaction(_write)
+        return len(values)
+
+    def upsert_soundlink_retention_rows(self, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        synced_at = datetime.now(tz=UTC)
+        values = [
+            as_tuple(soundlink_retention_record(row, synced_at), SOUNDLINK_RETENTION_COLUMNS)
+            for row in rows
+        ]
+        placeholders = ", ".join("?" for _ in SOUNDLINK_RETENTION_COLUMNS)
+        cols = ", ".join(SOUNDLINK_RETENTION_COLUMNS)
+
+        def _write() -> None:
+            self._conn.executemany(
+                f"INSERT OR REPLACE INTO soundlink_cohort_retention_daily ({cols}) "
                 f"VALUES ({placeholders})",
                 values,
             )

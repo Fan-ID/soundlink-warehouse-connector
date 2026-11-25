@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 SyncMode = Literal["full", "incremental"]
 SyncEntity = Literal["campaigns", "soundlinks"]
 
+SOUNDLINK_BATCH_SIZE = 50
+
 
 @dataclass
 class SyncStats:
@@ -25,6 +27,7 @@ class SyncStats:
     entities_resumed_skip: int = 0
     breakdown_rows: int = 0
     engagement_rows: int = 0
+    retention_rows: int = 0
     windows_processed: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -107,6 +110,10 @@ def _completed_ids(state: StateStore, key: str, field: str) -> set[str]:
     if not isinstance(raw, list):
         return set()
     return {str(x) for x in raw}
+
+
+def _chunk(items: list[str], size: int) -> list[list[str]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
 
 
 def _save_progress(
@@ -335,44 +342,48 @@ def _run_soundlink_sync(
     )
     completed = set(already_done)
 
-    for soundlink in soundlinks:
-        if soundlink.soundlink_id in already_done:
-            stats.entities_resumed_skip += 1
-            logger.info(
-                "Resume: skipping %s (already completed in %s)",
-                soundlink.soundlink_id,
-                run_key,
-            )
-            continue
+    by_id = {s.soundlink_id: s for s in soundlinks}
+    pending_ids = [s.soundlink_id for s in soundlinks if s.soundlink_id not in already_done]
+    stats.entities_resumed_skip = len(soundlinks) - len(pending_ids)
+    if stats.entities_resumed_skip:
+        logger.info(
+            "Resume: skipping %s soundlink(s) already completed in %s",
+            stats.entities_resumed_skip,
+            run_key,
+        )
 
+    for batch_ids in _chunk(pending_ids, SOUNDLINK_BATCH_SIZE):
+        batch = [by_id[sid] for sid in batch_ids]
+        earliest_created = min(s.created_date for s in batch)
         windows = metric_windows(
-            soundlink.created_date,
+            earliest_created,
             mode=mode,
             today=sync_day,
             lookback_days=settings.incremental_lookback_days,
         )
         if not windows:
-            stats.entities_skipped += 1
+            stats.entities_skipped += len(batch_ids)
             logger.info(
-                "Skipping metrics for %s (no overlap with sync window; created %s)",
-                soundlink.soundlink_id,
-                soundlink.created_date,
+                "Skipping metrics for %s soundlink(s) (no overlap with sync window; "
+                "earliest created %s)",
+                len(batch_ids),
+                earliest_created,
             )
-            completed.add(soundlink.soundlink_id)
+            completed.update(batch_ids)
             if track_org_progress:
                 _save_progress(
                     state, run_key, entity=entity, mode=mode, completed=completed
                 )
             continue
 
-        entity_ok = True
+        failed_ids: set[str] = set()
         for start_date, end_date in windows:
             stats.windows_processed += 1
-            label = f"{soundlink.soundlink_id} [{start_date}..{end_date}]"
+            batch_label = f"batch[{len(batch_ids)}] [{start_date}..{end_date}]"
             try:
-                breakdown_rows, _ = client.export_metrics_jsonl(
-                    soundlink_id=soundlink.soundlink_id,
+                breakdown_rows, _ = client.export_soundlink_metrics_batch_jsonl(
                     kind="breakdown",
+                    soundlink_ids=batch_ids,
                     start_date=start_date,
                     end_date=end_date,
                 )
@@ -380,30 +391,50 @@ def _run_soundlink_sync(
                     breakdown_rows
                 )
 
-                engagement_rows, _ = client.export_metrics_jsonl(
-                    soundlink_id=soundlink.soundlink_id,
-                    kind="engagement",
+                retention_rows, _ = client.export_soundlink_metrics_batch_jsonl(
+                    kind="retention",
+                    soundlink_ids=batch_ids,
                     start_date=start_date,
                     end_date=end_date,
+                    group_by="country",
                 )
-                stats.engagement_rows += loader.upsert_soundlink_engagement_rows(
-                    engagement_rows
+                stats.retention_rows += loader.upsert_soundlink_retention_rows(
+                    retention_rows
                 )
 
                 logger.info(
-                    "Synced %s: breakdown=%s engagement=%s",
-                    label,
+                    "Synced %s: breakdown=%s retention=%s",
+                    batch_label,
                     len(breakdown_rows),
-                    len(engagement_rows),
+                    len(retention_rows),
                 )
             except Exception as exc:
-                entity_ok = False
-                message = f"{label}: {exc}"
-                logger.exception("Failed to sync window %s", label)
+                failed_ids.update(batch_ids)
+                message = f"{batch_label}: {exc}"
+                logger.exception("Failed to sync batch window %s", batch_label)
                 stats.errors.append(message)
 
-        if entity_ok:
-            completed.add(soundlink.soundlink_id)
+            for sid in batch_ids:
+                label = f"{sid} [{start_date}..{end_date}]"
+                try:
+                    engagement_rows, _ = client.export_metrics_jsonl(
+                        soundlink_id=sid,
+                        kind="engagement",
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                    stats.engagement_rows += loader.upsert_soundlink_engagement_rows(
+                        engagement_rows
+                    )
+                except Exception as exc:
+                    failed_ids.add(sid)
+                    message = f"{label}: {exc}"
+                    logger.exception("Failed to sync engagement window %s", label)
+                    stats.errors.append(message)
+
+        batch_completed = set(batch_ids) - failed_ids
+        if batch_completed:
+            completed.update(batch_completed)
             if track_org_progress:
                 _save_progress(
                     state, run_key, entity=entity, mode=mode, completed=completed

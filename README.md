@@ -116,12 +116,14 @@ uv run soundlink-sync sync --mode incremental --entity campaigns --no-resume
 | `incremental` | Last N inclusive days, clamped to `createdAt`; skip if no overlap |
 | `full`        | Backfill from `createdAt` → today in ≤90-day windows              |
 
-| `--entity`   | Warehouse tables                                                      |
-| ------------ | --------------------------------------------------------------------- |
-| `campaigns`  | `campaigns`, `campaign_country_daily`, `campaign_engagement_daily`    |
-| `soundlinks` | `soundlinks`, `soundlink_country_daily`, `soundlink_engagement_daily` |
+| `--entity`   | Warehouse tables                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------------ |
+| `campaigns`  | `campaigns`, `campaign_country_daily`, `campaign_engagement_daily`                                     |
+| `soundlinks` | `soundlinks`, `soundlink_country_daily`, `soundlink_cohort_retention_daily`, `soundlink_engagement_daily` |
 
 Default `--entity` is `campaigns` (existing behavior). Campaigns and soundlinks use **separate** resume keys and `last_sync` records so one entity never blocks the other.
+
+Soundlinks are synced in **batches of up to 50 IDs** per request: country breakdown and cohort retention (`groupBy=country`) use the batch export endpoints over a shared date window per batch (based on the earliest `createdAt` in the batch). Engagement has no batch API, so it's still fetched **per soundlink**. Resume marks an ID completed only once its batch metrics and its own engagement export have all succeeded.
 
 Re-runs are **idempotent** (upsert / `MERGE` on documented primary keys).
 
@@ -148,8 +150,9 @@ Use `--no-resume` to ignore progress and re-fetch every entity for that `--entit
 | Campaign country daily    | `…/campaigns/…/metrics/breakdown/export`    | `campaign_country_daily`      |
 | Campaign engagement daily | `…/campaigns/…/metrics/engagement/export`   | `campaign_engagement_daily`   |
 | Soundlinks                | `GET /v1/soundlinks`                        | `soundlinks`                  |
-| Soundlink country daily   | `…/soundlinks/…/metrics/breakdown/export`   | `soundlink_country_daily`     |
-| Soundlink engagement daily| `…/soundlinks/…/metrics/engagement/export`  | `soundlink_engagement_daily`  |
+| Soundlink country daily   | `…/soundlinks/metrics/breakdown/export/batch` (batch, up to 50 IDs) | `soundlink_country_daily`     |
+| Soundlink cohort retention| `…/soundlinks/metrics/retention/export/batch` (batch, up to 50 IDs, `groupBy=country`) | `soundlink_cohort_retention_daily` |
+| Soundlink engagement daily| `…/soundlinks/…/metrics/engagement/export` (per soundlink; no batch API) | `soundlink_engagement_daily`  |
 
 ### Primary keys
 
@@ -158,6 +161,7 @@ Use `--no-resume` to ignore progress and re-fetch every entity for that `--entit
 - `campaign_engagement_daily`: `(provider, account_id, report_date, campaign_id, engagement_context, country_code, engaged_spotify_track_id)`
 - `soundlinks`: `soundlink_id`
 - `soundlink_country_daily`: `(provider, account_id, report_date, soundlink_id, country_code)`
+- `soundlink_cohort_retention_daily`: `(provider, account_id, cohort_date, soundlink_id, country_code)`
 - `soundlink_engagement_daily`: `(provider, account_id, report_date, soundlink_id, engagement_context, country_code, engaged_spotify_track_id)`
 
 ### Metrics caveats (from public docs)
@@ -167,6 +171,7 @@ Use `--no-resume` to ignore progress and re-fetch every entity for that `--entit
 - Do **not** sum `listeners` across days on engagement rows.
 - Soundlink breakdown rows have **no** financial fields (no spend/impressions).
 - Soundlink engagement rows have **no** `status` field.
+- Soundlink cohort retention (`soundlink_cohort_retention_daily` v1.1) requires a Label, Enterprise, committed, or self-serve plan; `retention_by_day_N` / `returned_on_day_N` / `streams_on_day_N` are `null` until day N has passed for the cohort date.
 
 ## Examples
 

@@ -69,6 +69,7 @@ def _loader() -> MagicMock:
     loader.upsert_soundlinks.side_effect = lambda items: len(items)
     loader.upsert_soundlink_breakdown_rows.side_effect = lambda rows: len(rows)
     loader.upsert_soundlink_engagement_rows.side_effect = lambda rows: len(rows)
+    loader.upsert_soundlink_retention_rows.side_effect = lambda rows: len(rows)
     return loader
 
 
@@ -252,6 +253,7 @@ def test_run_sync_resume_skips_completed_soundlinks(tmp_path: Path) -> None:
     client = MagicMock()
     client.iter_soundlinks.return_value = iter([_soundlink("sl-1"), _soundlink("sl-2")])
     client.export_metrics_jsonl.return_value = ([], 0)
+    client.export_soundlink_metrics_batch_jsonl.return_value = ([], 0)
     loader = _loader()
 
     stats = run_sync(
@@ -266,8 +268,11 @@ def test_run_sync_resume_skips_completed_soundlinks(tmp_path: Path) -> None:
     )
 
     assert stats.entities_resumed_skip == 1
-    # sl-2 only: 2 exports (breakdown + engagement) for one window
-    assert client.export_metrics_jsonl.call_count == 2
+    # sl-2 only: 1 window → 2 batch calls (breakdown + retention) + 1 engagement call
+    assert client.export_soundlink_metrics_batch_jsonl.call_count == 2
+    for call in client.export_soundlink_metrics_batch_jsonl.call_args_list:
+        assert call.kwargs["soundlink_ids"] == ["sl-2"]
+    assert client.export_metrics_jsonl.call_count == 1
     for call in client.export_metrics_jsonl.call_args_list:
         assert call.kwargs["soundlink_id"] == "sl-2"
         assert "campaign_id" not in call.kwargs or call.kwargs.get("campaign_id") is None
@@ -288,6 +293,7 @@ def test_run_sync_soundlinks_uses_separate_resume_key(tmp_path: Path) -> None:
     client = MagicMock()
     client.iter_soundlinks.return_value = iter([_soundlink("sl-1"), _soundlink("sl-2")])
     client.export_metrics_jsonl.return_value = ([], 0)
+    client.export_soundlink_metrics_batch_jsonl.return_value = ([], 0)
     loader = _loader()
 
     stats = run_sync(
@@ -303,7 +309,12 @@ def test_run_sync_soundlinks_uses_separate_resume_key(tmp_path: Path) -> None:
 
     assert stats.entities_synced == 2
     assert stats.entities_resumed_skip == 0
-    assert client.export_metrics_jsonl.call_count == 4
+    # Both soundlinks chunk into one batch, one window → 2 batch calls (breakdown + retention)
+    assert client.export_soundlink_metrics_batch_jsonl.call_count == 2
+    for call in client.export_soundlink_metrics_batch_jsonl.call_args_list:
+        assert set(call.kwargs["soundlink_ids"]) == {"sl-1", "sl-2"}
+    # Engagement stays per-soundlink: one call per id for the shared window
+    assert client.export_metrics_jsonl.call_count == 2
     assert state.get("last_sync_soundlinks") is not None
     assert state.get("run:soundlinks:incremental:2026-08-28") is None
     # Campaign resume state untouched.
@@ -311,6 +322,97 @@ def test_run_sync_soundlinks_uses_separate_resume_key(tmp_path: Path) -> None:
         "completed_campaign_ids": ["camp-1"],
         "mode": "incremental",
     }
+
+
+def test_run_sync_soundlinks_retention_batch_uses_group_by_country(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    state = StateStore(settings.state_path)
+    client = MagicMock()
+    client.iter_soundlinks.return_value = iter([_soundlink("sl-1")])
+    client.export_metrics_jsonl.return_value = ([], 0)
+    client.export_soundlink_metrics_batch_jsonl.return_value = ([], 0)
+    loader = _loader()
+
+    run_sync(
+        settings,
+        client,
+        loader,
+        state,
+        "incremental",
+        entity="soundlinks",
+        today=date(2026, 8, 28),
+    )
+
+    kinds = {
+        call.kwargs["kind"]: call.kwargs.get("group_by")
+        for call in client.export_soundlink_metrics_batch_jsonl.call_args_list
+    }
+    assert kinds == {"breakdown": None, "retention": "country"}
+
+
+def test_run_sync_soundlinks_chunks_into_batches_of_50(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    state = StateStore(settings.state_path)
+    soundlinks = [_soundlink(f"sl-{i}") for i in range(51)]
+    client = MagicMock()
+    client.iter_soundlinks.return_value = iter(soundlinks)
+    client.export_metrics_jsonl.return_value = ([], 0)
+    client.export_soundlink_metrics_batch_jsonl.return_value = ([], 0)
+    loader = _loader()
+
+    run_sync(
+        settings,
+        client,
+        loader,
+        state,
+        "incremental",
+        entity="soundlinks",
+        today=date(2026, 8, 28),
+    )
+
+    breakdown_calls = [
+        call
+        for call in client.export_soundlink_metrics_batch_jsonl.call_args_list
+        if call.kwargs["kind"] == "breakdown"
+    ]
+    batch_sizes = sorted(len(call.kwargs["soundlink_ids"]) for call in breakdown_calls)
+    assert batch_sizes == [1, 50]
+
+
+def test_run_sync_soundlinks_partial_engagement_failure_marks_only_failed_id(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    state = StateStore(settings.state_path)
+    client = MagicMock()
+    client.iter_soundlinks.return_value = iter([_soundlink("sl-1"), _soundlink("sl-2")])
+    client.export_soundlink_metrics_batch_jsonl.return_value = ([], 0)
+
+    def _engagement(*, soundlink_id: str, **_kwargs: object) -> tuple[list, int]:
+        if soundlink_id == "sl-1":
+            raise RuntimeError("boom")
+        return [], 0
+
+    client.export_metrics_jsonl.side_effect = _engagement
+    loader = _loader()
+
+    stats = run_sync(
+        settings,
+        client,
+        loader,
+        state,
+        "incremental",
+        entity="soundlinks",
+        today=date(2026, 8, 28),
+    )
+
+    assert len(stats.errors) == 1
+    progress = state.get("run:soundlinks:incremental:2026-08-28")
+    assert progress is not None
+    assert progress["completed_soundlink_ids"] == ["sl-2"]
+    assert state.get("last_sync_soundlinks") is None
 
 
 def test_run_sync_rejects_crossed_entity_ids(tmp_path: Path) -> None:

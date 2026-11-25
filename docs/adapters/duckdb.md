@@ -25,7 +25,7 @@ DUCKDB_PATH=./data/soundlink.duckdb
 
 - Tables (by `--entity`):
   - `campaigns`: `campaigns`, `campaign_country_daily`, `campaign_engagement_daily`
-  - `soundlinks`: `soundlinks`, `soundlink_country_daily`, `soundlink_engagement_daily`
+  - `soundlinks`: `soundlinks`, `soundlink_country_daily`, `soundlink_cohort_retention_daily`, `soundlink_engagement_daily`
 - Upsert: `INSERT OR REPLACE` on Public API primary keys (each batch in a transaction)
 - Schema migrations: `ALTER TABLE … ADD COLUMN IF NOT EXISTS` for new fields
 
