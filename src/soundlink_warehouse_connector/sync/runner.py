@@ -116,7 +116,6 @@ def _chunk(items: list[str], size: int) -> list[list[str]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
-# Epoch floor for shared incremental lookback (batch API needs one window).
 _BATCH_INCREMENTAL_CREATED_FLOOR = date(1970, 1, 1)
 
 
@@ -127,13 +126,7 @@ def _soundlink_batch_windows(
     today: date,
     lookback_days: int,
 ) -> list[tuple[date, date]]:
-    """
-    Shared metric windows for one soundlink ID batch.
-
-    Incremental uses the lookback only (not min(createdAt)), so newer IDs in a
-    mixed batch do not pull a wider history. Full sync still starts at the
-    earliest created date in the batch.
-    """
+    """Shared date windows for a soundlink ID batch (incremental = lookback only)."""
     if not created_dates:
         return []
     created = (
@@ -166,12 +159,7 @@ def _sync_soundlink_retention_batch(
     end_date: date,
     batch_label: str,
 ) -> None:
-    """
-    Retention is best-effort relative to breakdown.
-
-    Premium-plan 403 is skipped (warn only). Other retention failures are logged
-    but do not mark the batch failed — breakdown may already be persisted.
-    """
+    """Fetch retention; skip on premium 403 / other errors without failing the batch."""
     try:
         retention_rows, _ = client.export_soundlink_metrics_batch_jsonl(
             kind="retention",
@@ -193,7 +181,6 @@ def _sync_soundlink_retention_batch(
                 batch_label,
             )
             return
-        # Soft-fail: breakdown may already be persisted; do not block last_sync.
         logger.exception(
             "Failed to sync retention batch %s (continuing without retention)",
             batch_label,

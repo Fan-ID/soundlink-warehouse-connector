@@ -286,8 +286,7 @@ class SoundlinkClient:
         end_date: date,
         group_by: str | None = None,
     ) -> tuple[list[dict[str, Any]], int | None]:
-        """POST batch JSONL soundlink metrics for up to 50 IDs; reuses the same
-        retry/X-Row-Count handling as `export_metrics_jsonl`."""
+        """Stream batch JSONL for up to 50 soundlink IDs; retries like export_metrics_jsonl."""
         if not soundlink_ids:
             raise ValueError("soundlink_ids must not be empty")
         if len(soundlink_ids) > MAX_BATCH_SOUNDLINK_IDS:
